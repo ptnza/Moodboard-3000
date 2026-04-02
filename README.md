@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="Moodboard 3000.png" alt="Moodboard 3000" width="100%" />
+  <img width="1920" height="1080" alt="Moodboard 3000" src="https://github.com/user-attachments/assets/5a259312-f714-494f-adcd-3c634d5aa97a" />
 </p>
 
 <h1 align="center">Moodboard 3000</h1>
