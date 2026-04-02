@@ -60,8 +60,8 @@ Plugins → Development → Moodboard 3000
 
 | Mode | Description |
 |------|-------------|
-| **Grid** | Clean, uniform layouts. The reliable one. |
-| **Editorial** | Puzzle-like compositions that actually feel composed. |
+| **Grid** | Clean, structured rows. Simple, but not rigid. |
+| **Editorial** | Composed, full-frame layouts with varied scale. |
 | **Masonry** | Pinterest-style flow. Loose, but still structured. |
 | **Cluster** | Organic, center-weighted. Slightly chaotic (in a good way). |
 
