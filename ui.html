@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Moodboard 3000</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:      #c9cdd6;
+    --surface: #d4d8e1;
+    --input:   #b4b9c2;
+    --text:    #1c1f26;
+    --muted:   #6a6f7a;
+    --accent:  #3a8fd0;
+    --border:  rgba(0,0,0,0.12);
+    --danger:  #b83030;
+    --hi:      rgba(255,255,255,0.65);
+    --sh:      rgba(0,0,0,0.18);
+  }
+
+  html, body {
+    width: 320px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+    font-size: 12px;
+    line-height: 1.4;
+    overflow-x: hidden;
+  }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: #a8adb6; border-radius: 2px; }
+  ::-webkit-scrollbar-thumb { background: #848990; border-radius: 2px; }
+  * { scrollbar-width: thin; scrollbar-color: #848990 #a8adb6; }
+
+  .images-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  .images-header .img-count {
+    flex: 1;
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--text);
+    text-shadow: 0 1px 0 var(--hi);
+  }
+
+  /* ── Icon buttons — raised ── */
+  .icon-btn {
+    height: 22px;
+    padding: 0 9px;
+    border: none;
+    border-radius: 4px;
+    background: linear-gradient(180deg, #dde1ea 0%, #c6cad3 100%);
+    color: #3a3e48;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.65),
+      0 1px 2px rgba(0,0,0,0.2),
+      0 0 0 1px rgba(0,0,0,0.14);
+    transition: filter .12s;
+    white-space: nowrap;
+  }
+  .icon-btn:hover { filter: brightness(1.06); }
+  .icon-btn:active {
+    background: linear-gradient(180deg, #bdc1ca 0%, #caced7 100%);
+    box-shadow: inset 1px 1px 2px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.14);
+  }
+  .icon-btn.danger:hover {
+    background: linear-gradient(180deg, #e8d0d0 0%, #d4b0b0 100%);
+    color: #7a2828;
+    filter: none;
+  }
+
+  /* ── Thumb strip — inset well ── */
+  #thumb-strip {
+    display: flex;
+    gap: 5px;
+    overflow-x: auto;
+    padding: 6px;
+    min-height: 50px;
+    align-items: flex-start;
+    background: linear-gradient(180deg, #adb2bb 0%, #b8bdc6 100%);
+    border-radius: 5px;
+    box-shadow:
+      inset 1px 1px 3px rgba(0,0,0,0.2),
+      inset 0 0 0 1px rgba(0,0,0,0.1),
+      0 1px 0 rgba(255,255,255,0.45);
+    scrollbar-width: thin;
+    scrollbar-color: #848990 #a0a5ae;
+  }
+  #thumb-strip::-webkit-scrollbar-track { background: #a0a5ae; }
+  #thumb-strip::-webkit-scrollbar-thumb { background: #848990; }
+
+  .thumb {
+    width: 36px;
+    height: 36px;
+    border-radius: 3px;
+    overflow: hidden;
+    flex-shrink: 0;
+    position: relative;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 0 0 1px rgba(0,0,0,0.15);
+    cursor: default;
+  }
+  .thumb img {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .thumb-remove {
+    position: absolute;
+    top: 1px; right: 1px;
+    width: 13px; height: 13px;
+    border-radius: 50%;
+    background: rgba(0,0,0,.6);
+    color: #fff;
+    border: none;
+    font-size: 8px;
+    line-height: 13px;
+    text-align: center;
+    cursor: pointer;
+    display: none;
+    padding: 0;
+  }
+  .thumb:hover .thumb-remove { display: block; }
+
+  .thumb-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: 38px;
+    color: #70757f;
+    font-size: 11px;
+    font-style: italic;
+    text-shadow: 0 1px 0 rgba(255,255,255,0.25);
+  }
+
+  .images-actions {
+    display: flex;
+    gap: 5px;
+    margin-top: 8px;
+  }
+
+  /* ── Thumb placeholder + spinner ── */
+  .thumb-placeholder {
+    width: 100%; height: 100%;
+    background: #9ea3ac;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: #5a5f68;
+    letter-spacing: .02em;
+    user-select: none;
+  }
+  .thumb-spinner {
+    position: absolute;
+    inset: 0;
+    background: rgba(180,185,194,.75);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+  .thumb-spinner::after {
+    content: '';
+    width: 14px; height: 14px;
+    border: 2px solid rgba(0,0,0,0.12);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .6s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Section labels — engraved ── */
+  .section-label {
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: #50545e;
+    text-shadow: 0 1px 0 rgba(255,255,255,0.5);
+    padding: 16px 20px 6px;
+  }
+
+  /* ── Section card — raised panel ── */
+  .section {
+    background: linear-gradient(180deg, #d8dce5 0%, #c8ccd5 100%);
+    border-radius: 6px;
+    margin: 0 8px;
+    padding: 0 12px;
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.6),
+      0 1px 3px rgba(0,0,0,0.15),
+      0 0 0 1px rgba(0,0,0,0.1);
+  }
+
+  /* ── Row ── */
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 32px;
+  }
+  .row + .row { border-top: 1px solid rgba(0,0,0,0.09); }
+  .row.row-color { min-height: 36px; padding: 4px 0; }
+
+  .row-label {
+    flex: 0 0 76px;
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 500;
+    text-shadow: 0 1px 0 rgba(255,255,255,0.35);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* ── Inputs — inset wells ── */
+  input[type="text"],
+  input[type="number"],
+  select {
+    height: 26px;
+    border: none;
+    border-radius: 4px;
+    background: linear-gradient(180deg, #aaafb8 0%, #b8bdc6 100%);
+    color: var(--text);
+    font-size: 12px;
+    padding: 0 8px;
+    outline: none;
+    box-shadow:
+      inset 1px 1px 2px rgba(0,0,0,0.2),
+      inset 0 0 0 1px rgba(0,0,0,0.1),
+      0 1px 0 rgba(255,255,255,0.4);
+    transition: box-shadow .15s;
+  }
+  input[type="text"]:focus,
+  input[type="number"]:focus,
+  select:focus {
+    box-shadow:
+      inset 1px 1px 2px rgba(0,0,0,0.2),
+      inset 0 0 0 1px rgba(58,143,208,0.55),
+      0 1px 0 rgba(255,255,255,0.4);
+  }
+
+  select {
+    padding-right: 22px;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2350545e'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    cursor: pointer;
+  }
+  .select-full { width: 100%; }
+
+  /* ── Slider + number ── */
+  .slider-row { display: flex; align-items: center; gap: 6px; flex: 1; }
+
+  input[type="range"] {
+    -webkit-appearance: none;
+    flex: 1;
+    height: 4px;
+    border-radius: 2px;
+    background: linear-gradient(180deg, #a0a5ae 0%, #b0b5be 100%);
+    outline: none;
+    cursor: pointer;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.22), 0 1px 0 rgba(255,255,255,0.38);
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: linear-gradient(180deg, #f0f2f6 0%, #d6dae3 55%, #c0c5ce 100%);
+    border: none;
+    cursor: pointer;
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.85),
+      0 1px 3px rgba(0,0,0,0.28),
+      0 0 0 1px rgba(0,0,0,0.15);
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: linear-gradient(180deg, #f0f2f6 0%, #d6dae3 55%, #c0c5ce 100%);
+    border: none;
+    cursor: pointer;
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.85),
+      0 1px 3px rgba(0,0,0,0.28),
+      0 0 0 1px rgba(0,0,0,0.15);
+  }
+
+  .num-input {
+    width: 32px;
+    text-align: right;
+    flex-shrink: 0;
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    color: var(--text);
+    font-size: 12px;
+    padding: 0 2px 0 0;
+    outline: none;
+    pointer-events: none;
+    -moz-appearance: textfield;
+  }
+  .num-input::-webkit-inner-spin-button,
+  .num-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+  /* ── Color row ── */
+  .color-row { display: flex; align-items: center; gap: 6px; flex: 1; }
+
+  .color-swatch-wrap {
+    position: relative;
+    width: 20px; height: 20px;
+    border-radius: 3px;
+    border: none;
+    box-shadow:
+      inset 0 1px 2px rgba(0,0,0,0.22),
+      0 1px 0 rgba(255,255,255,0.45),
+      0 0 0 1px rgba(0,0,0,0.14);
+    overflow: hidden;
+    flex-shrink: 0;
+    cursor: pointer;
+  }
+  .color-swatch-wrap input[type="color"] {
+    position: absolute;
+    inset: -4px;
+    width: calc(100% + 8px);
+    height: calc(100% + 8px);
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    opacity: 0;
+  }
+  .color-preview {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    border-radius: 2px;
+  }
+
+  .hex-input {
+    width: 72px;
+    font-family: 'SF Mono', Menlo, monospace;
+    font-size: 11px;
+    letter-spacing: .02em;
+  }
+
+  /* ── Segmented control ── */
+  .seg-control {
+    display: flex;
+    gap: 3px;
+    width: 100%;
+    padding: 6px 0;
+  }
+  .seg-btn {
+    flex: 1;
+    height: 26px;
+    border: none;
+    border-radius: 4px;
+    background: linear-gradient(180deg, #d8dce5 0%, #c4c9d2 100%);
+    color: #3a3e48;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.6),
+      0 1px 2px rgba(0,0,0,0.15),
+      0 0 0 1px rgba(0,0,0,0.12);
+    transition: filter .12s;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding: 0 4px;
+  }
+  .seg-btn.active {
+    background: linear-gradient(180deg, #2575b8 0%, #3a8fd0 100%);
+    color: #fff;
+    box-shadow:
+      inset 0 1px 2px rgba(0,0,0,0.2),
+      inset 0 0 0 1px rgba(0,0,0,0.1);
+    text-shadow: 0 1px 1px rgba(0,0,0,0.25);
+  }
+  .seg-btn:hover:not(.active) { filter: brightness(1.05); }
+
+  /* ── Generate button ── */
+  .generate-wrap { padding: 28px 8px 0; }
+
+  #generate-btn {
+    width: 100%;
+    height: 45px;
+    position: relative;
+    background: linear-gradient(180deg, #72b8e8 0%, #3a8fd0 45%, #2878be 50%, #3a8fd0 100%);
+    color: #fff;
+    border: none;
+    border-radius: 16px;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: .03em;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+    cursor: pointer;
+    box-shadow:
+      inset 0 1px 1px rgba(255,255,255,0.6),
+      0 4px 12px rgba(26,100,200,0.45),
+      0 1px 3px rgba(0,0,0,0.25);
+    transition: filter .15s;
+    overflow: hidden;
+  }
+  #generate-btn::after {
+    content: '';
+    position: absolute;
+    inset: 0 0 50% 0;
+    background: linear-gradient(180deg, rgba(255,255,255,0.38) 0%, rgba(255,255,255,0.06) 100%);
+    border-radius: 16px 16px 0 0;
+    pointer-events: none;
+  }
+  #generate-btn:hover:not(:disabled) { filter: brightness(1.06); }
+  #generate-btn:disabled {
+    background: linear-gradient(180deg, #d0d0d0 0%, #b8b8b8 50%, #acacac 50%, #b8b8b8 100%);
+    color: #f0f0f0;
+    box-shadow: inset 0 1px 1px rgba(255,255,255,0.5);
+    text-shadow: none;
+    cursor: not-allowed;
+    filter: none;
+  }
+
+  #status {
+    padding: 5px 12px 14px;
+    font-size: 11px;
+    color: #5a5f68;
+    min-height: 0;
+    text-align: center;
+    text-transform: uppercase;
+    font-style: italic;
+    letter-spacing: 0.02em;
+    transition: opacity 0.6s ease;
+  }
+  #status.error { color: #8b2020; font-style: italic; }
+  #status.success { color: #5a5f68; }
+
+  #file-input { display: none; }
+
+</style>
+</head>
+<body style="margin:0;padding:0;display:flex;flex-direction:column;height:100vh;overflow:hidden;background:#c9cdd6;color:#1c1f26;">
+
+<div style="flex:1;overflow-y:auto;">
+
+<div style="padding:16px;">
+  <div class="images-header">
+    <span class="img-count" id="img-count">0 images</span>
+    <button class="icon-btn" id="refresh-btn" title="Re-read Figma selection">↺ Refresh</button>
+    <button class="icon-btn danger" id="clear-btn">Clear</button>
+  </div>
+
+  <div id="thumb-strip">
+    <div class="thumb-empty" id="thumb-empty">Select images on canvas or upload files</div>
+  </div>
+
+  <div class="images-actions">
+    <button class="icon-btn" id="upload-btn">+ Upload images</button>
+  </div>
+
+  <input type="file" id="file-input" accept="image/*" multiple />
+</div>
+
+<!-- ── Layout ─────────────────────────────────────────────────── -->
+<div class="section-label">Layout</div>
+<div class="section">
+  <div class="seg-control" id="layout-control">
+    <button class="seg-btn active" data-value="grid">Grid</button>
+    <button class="seg-btn" data-value="editorial">Editorial</button>
+    <button class="seg-btn" data-value="masonry">Masonry</button>
+    <button class="seg-btn" data-value="cluster">Cluster</button>
+  </div>
+  <div class="row">
+    <span class="row-label">Gap</span>
+    <div class="slider-row">
+      <input type="range" id="gap-slider" min="0" max="60" value="8" />
+      <input type="number" class="num-input" id="gap-num" min="0" max="60" value="8" />
+    </div>
+  </div>
+  <div class="row">
+    <span class="row-label">Margin</span>
+    <div class="slider-row">
+      <input type="range" id="padding-slider" min="0" max="100" value="24" />
+      <input type="number" class="num-input" id="padding-num" min="0" max="100" value="24" />
+    </div>
+  </div>
+</div>
+
+<!-- ── Image Frame ────────────────────────────────────────────── -->
+<div class="section-label">Image Frame</div>
+<div class="section">
+  <div class="row row-color">
+    <span class="row-label">Color</span>
+    <div class="color-row">
+      <div class="color-swatch-wrap">
+        <div class="color-preview" id="cell-color-preview" style="background:#f0f0f0"></div>
+        <input type="color" id="cell-color-picker" value="#f0f0f0" />
+      </div>
+      <input type="text" class="hex-input" id="cell-hex" value="#F0F0F0" maxlength="7" />
+    </div>
+  </div>
+  <div class="row">
+    <span class="row-label">Padding</span>
+    <div class="slider-row">
+      <input type="range" id="cell-padding-slider" min="0" max="40" value="0" />
+      <input type="number" class="num-input" id="cell-padding-num" min="0" max="40" value="0" />
+    </div>
+  </div>
+  <div class="row">
+    <span class="row-label">Rounding</span>
+    <div class="slider-row">
+      <input type="range" id="radius-slider" min="0" max="100" value="0" />
+      <input type="number" class="num-input" id="radius-num" min="0" max="100" value="0" />
+    </div>
+  </div>
+</div>
+
+<!-- ── Page ───────────────────────────────────────────────────── -->
+<div class="section-label">Page</div>
+<div class="section">
+  <div class="row">
+    <span class="row-label">Size</span>
+    <select id="preset-select" class="select-full">
+      <option value="1920x1080">Full Page (16:9)</option>
+      <option value="1440x1080">Standard (4:3)</option>
+      <option value="960x1080">Half Page</option>
+    </select>
+  </div>
+  <div class="row row-color">
+    <span class="row-label">Background</span>
+    <div class="color-row">
+      <div class="color-swatch-wrap">
+        <div class="color-preview" id="bg-color-preview" style="background:#ffffff"></div>
+        <input type="color" id="bg-color-picker" value="#ffffff" />
+      </div>
+      <input type="text" class="hex-input" id="bg-hex" value="#FFFFFF" maxlength="7" />
+    </div>
+  </div>
+</div>
+
+<!-- ── Generate ───────────────────────────────────────────────── -->
+<div class="generate-wrap">
+  <button id="generate-btn" disabled>Engage 3000</button>
+</div>
+<div id="status"></div>
+
+</div><!-- scrollable panel -->
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+const images = [];
+let nextId = 0;
+
+const MAX_CHUNK_BYTES  = 60000;
+const MAX_COMPRESS_DIM = 500;
+
+const PRESETS = {
+  '1920x1080': { width: 1920, height: 1080 },
+  '1440x1080': { width: 1440, height: 1080 },
+  '960x1080':  { width:  960, height: 1080 },
+};
+
+// ── DOM refs ─────────────────────────────────────────────────────────────────
+const thumbStrip  = document.getElementById('thumb-strip');
+const thumbEmpty  = document.getElementById('thumb-empty');
+const imgCount    = document.getElementById('img-count');
+const generateBtn = document.getElementById('generate-btn');
+const statusEl    = document.getElementById('status');
+const fileInput   = document.getElementById('file-input');
+
+// ── Thumbnail rendering ──────────────────────────────────────────────────────
+function renderThumbs() {
+  thumbStrip.querySelectorAll('.thumb').forEach(el => el.remove());
+
+  if (images.length === 0) {
+    thumbEmpty.style.display = '';
+  } else {
+    thumbEmpty.style.display = 'none';
+    images.forEach(img => {
+      const wrap = document.createElement('div');
+      wrap.className = 'thumb';
+      wrap.title = img.name;
+
+      if (img.blobUrl) {
+        const el = document.createElement('img');
+        el.src = img.blobUrl;
+        el.alt = img.name;
+        wrap.appendChild(el);
+      } else {
+        const ph = document.createElement('div');
+        ph.className = 'thumb-placeholder';
+        ph.textContent = img.name.substring(0, 2).toUpperCase();
+        wrap.appendChild(ph);
+      }
+
+      if (img.pending) {
+        const sp = document.createElement('div');
+        sp.className = 'thumb-spinner';
+        wrap.appendChild(sp);
+      }
+
+      const rm = document.createElement('button');
+      rm.className = 'thumb-remove';
+      rm.textContent = '×';
+      rm.title = 'Remove';
+      rm.addEventListener('click', (e) => { e.stopPropagation(); removeImage(img.id); });
+      wrap.appendChild(rm);
+      thumbStrip.appendChild(wrap);
+    });
+  }
+
+  const n = images.length;
+  imgCount.textContent = n === 0 ? '0 images' : n === 1 ? '1 image' : `${n} images${n < 5 ? ' — need 5+' : n >= MAX_IMAGES ? ` — max ${MAX_IMAGES}` : ''}`;
+  updateGenerateBtn();
+}
+
+function removeImage(id) {
+  const idx = images.findIndex(i => i.id === id);
+  if (idx === -1) return;
+  if (images[idx].blobUrl) URL.revokeObjectURL(images[idx].blobUrl);
+  images.splice(idx, 1);
+  renderThumbs();
+}
+
+function clearImages() {
+  images.forEach(i => { if (i.blobUrl) URL.revokeObjectURL(i.blobUrl); });
+  images.length = 0;
+  renderThumbs();
+}
+
+function updateGenerateBtn() {
+  generateBtn.disabled = images.length < 5 || images.some(i => i.pending);
+}
+
+// ── Add images from Figma selection ──────────────────────────────────────────
+const MAX_IMAGES = 40;
+
+function addFromSelection(rawImages) {
+  for (const img of rawImages) {
+    if (img.hash && images.some(i => i.hash === img.hash)) continue;
+    if (images.length >= MAX_IMAGES) {
+      setStatus(`Max ${MAX_IMAGES} images — only the first ${MAX_IMAGES} were added.`, 'error');
+      break;
+    }
+    let blobUrl = null;
+    if (img.thumb && img.thumb.length) {
+      const blob = new Blob([new Uint8Array(img.thumb)], { type: 'image/jpeg' });
+      blobUrl = URL.createObjectURL(blob);
+    }
+    images.push({ id: img.id || img.hash, type: 'selection', hash: img.hash,
+      width: img.width, height: img.height, name: img.name, blobUrl });
+  }
+  renderThumbs();
+}
+
+// ── Add images from file upload ───────────────────────────────────────────────
+async function addFromFiles(files) {
+  let capped = false;
+  for (const file of files) {
+    if (!file.type.startsWith('image/')) continue;
+    if (images.length >= MAX_IMAGES) { capped = true; break; }
+    const id = nextId++;
+    try {
+      const { bytes, width, height, blobUrl } = await compressImage(file);
+      if (images.length >= MAX_IMAGES) { capped = true; break; }
+      images.push({ id, type: 'upload', hash: null, width, height, name: file.name, blobUrl, pending: true });
+      renderThumbs();
+      sendChunked(id, bytes);
+    } catch (e) {
+      console.error('Failed to process file:', e);
+    }
+  }
+  if (capped) setStatus(`Max ${MAX_IMAGES} images — only the first ${MAX_IMAGES} were added.`, 'error');
+}
+
+function compressImage(file) {
+  return new Promise((resolve, reject) => {
+    const blobUrl = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const origW = img.naturalWidth, origH = img.naturalHeight;
+      let w = origW, h = origH;
+      if (w > MAX_COMPRESS_DIM || h > MAX_COMPRESS_DIM) {
+        if (w >= h) { h = Math.round(h * MAX_COMPRESS_DIM / w); w = MAX_COMPRESS_DIM; }
+        else        { w = Math.round(w * MAX_COMPRESS_DIM / h); h = MAX_COMPRESS_DIM; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      canvas.toBlob((blob) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve({
+          bytes: Array.from(new Uint8Array(e.target.result)),
+          width: origW, height: origH, blobUrl,
+        });
+        reader.onerror = reject;
+        reader.readAsArrayBuffer(blob);
+      }, 'image/jpeg', 0.85);
+    };
+    img.onerror = reject;
+    img.src = blobUrl;
+  });
+}
+
+function sendChunked(id, bytes) {
+  const totalChunks = Math.max(1, Math.ceil(bytes.length / MAX_CHUNK_BYTES));
+  for (let ci = 0; ci < totalChunks; ci++) {
+    const chunk = bytes.slice(ci * MAX_CHUNK_BYTES, (ci + 1) * MAX_CHUNK_BYTES);
+    parent.postMessage({ pluginMessage: { type: 'register-image', id, bytes: chunk, chunkIndex: ci, totalChunks } }, '*');
+  }
+}
+
+// ── UI events ────────────────────────────────────────────────────────────────
+document.getElementById('refresh-btn').addEventListener('click', () => {
+  parent.postMessage({ pluginMessage: { type: 'refresh-selection' } }, '*');
+});
+document.getElementById('clear-btn').addEventListener('click', clearImages);
+document.getElementById('upload-btn').addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => {
+  if (fileInput.files.length) { addFromFiles(Array.from(fileInput.files)); fileInput.value = ''; }
+});
+
+thumbStrip.addEventListener('dragover',  (e) => { e.preventDefault(); thumbStrip.style.outline = '2px dashed var(--accent)'; });
+thumbStrip.addEventListener('dragleave', ()  => { thumbStrip.style.outline = ''; });
+thumbStrip.addEventListener('drop', (e) => {
+  e.preventDefault(); thumbStrip.style.outline = '';
+  const files = Array.from(e.dataTransfer.files);
+  if (files.length) addFromFiles(files);
+});
+
+// ── Layout segmented control ─────────────────────────────────────────────────
+let currentLayout = 'grid';
+document.getElementById('layout-control').addEventListener('click', (e) => {
+  const btn = e.target.closest('.seg-btn');
+  if (!btn) return;
+  document.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  currentLayout = btn.dataset.value;
+});
+
+// ── Slider ↔ number sync ─────────────────────────────────────────────────────
+function linkSlider(sliderId, numId) {
+  const slider = document.getElementById(sliderId);
+  const num    = document.getElementById(numId);
+  slider.addEventListener('input', () => { num.value = slider.value; refreshSliderFill(slider); });
+  num.addEventListener('input', () => {
+    const v = Math.min(parseInt(num.max)||Infinity, Math.max(parseInt(num.min)||0, parseInt(num.value)||0));
+    slider.value = v; num.value = v; refreshSliderFill(slider);
+  });
+}
+linkSlider('gap-slider',          'gap-num');
+linkSlider('padding-slider',      'padding-num');
+linkSlider('cell-padding-slider', 'cell-padding-num');
+linkSlider('radius-slider',       'radius-num');
+
+// ── Color swatch ↔ hex input sync ────────────────────────────────────────────
+function linkColor(pickerId, previewId, hexId) {
+  const picker  = document.getElementById(pickerId);
+  const preview = document.getElementById(previewId);
+  const hex     = document.getElementById(hexId);
+  picker.addEventListener('input', () => {
+    const v = picker.value.toUpperCase(); hex.value = v; preview.style.background = v;
+  });
+  hex.addEventListener('input', () => {
+    const raw = hex.value.trim();
+    if (/^#[0-9A-Fa-f]{6}$/.test(raw)) { picker.value = raw; preview.style.background = raw; }
+  });
+  hex.addEventListener('blur', () => {
+    const raw = hex.value.trim();
+    if (/^#[0-9A-Fa-f]{6}$/.test(raw)) hex.value = raw.toUpperCase();
+  });
+}
+linkColor('bg-color-picker',   'bg-color-preview',   'bg-hex');
+linkColor('cell-color-picker', 'cell-color-preview', 'cell-hex');
+
+// ── Generate ─────────────────────────────────────────────────────────────────
+generateBtn.addEventListener('click', () => {
+  const n = images.length;
+  if (n === 0) { setStatus('No images found. Select images on the canvas or upload files.', 'error'); return; }
+  if (n < 5)   { setStatus('Add at least 5 images to generate a moodboard.', 'error'); return; }
+
+  generateBtn.disabled = true;
+  setStatus('Generating…', '');
+
+  const presetKey = document.getElementById('preset-select').value;
+  const preset    = PRESETS[presetKey] || PRESETS['1920x1080'];
+
+  const config = {
+    preset,
+    layout:       currentLayout,
+    gap:          parseInt(document.getElementById('gap-num').value) || 0,
+    padding:      parseInt(document.getElementById('padding-num').value) || 0,
+    bgColor:     { hex: document.getElementById('bg-hex').value,   opacity: 1 },
+    cellPadding:  parseInt(document.getElementById('cell-padding-num').value) || 0,
+    cellBgColor: { hex: document.getElementById('cell-hex').value, opacity: 1 },
+    cornerRadius: parseInt(document.getElementById('radius-num').value) || 0,
+  };
+
+  const imagePayload = images.map(img => ({
+    id: img.id, hash: img.hash || null, width: img.width, height: img.height, name: img.name,
+  }));
+
+  parent.postMessage({ pluginMessage: { type: 'generate', images: imagePayload, config } }, '*');
+});
+
+// ── Messages from code.js ─────────────────────────────────────────────────────
+window.onmessage = (event) => {
+  const msg = event.data.pluginMessage;
+  if (!msg) return;
+
+  if (msg.type === 'init') {
+    addFromSelection(msg.images || []);
+    setStatus('', '');
+  } else if (msg.type === 'image-registered') {
+    const img = images.find(i => i.id === msg.id);
+    if (img) { img.hash = msg.hash; img.pending = false; }
+    renderThumbs(); setStatus('', '');
+  } else if (msg.type === 'image-register-error') {
+    const idx = images.findIndex(i => i.id === msg.id);
+    if (idx !== -1) images.splice(idx, 1);
+    renderThumbs();
+    setStatus('Failed to register image: ' + (msg.message || 'unknown error'), 'error');
+  } else if (msg.type === 'thumb-update') {
+    const img = images.find(i => i.hash === msg.hash);
+    if (img && msg.thumb && msg.thumb.length) {
+      if (img.blobUrl) URL.revokeObjectURL(img.blobUrl);
+      img.blobUrl = URL.createObjectURL(new Blob([new Uint8Array(msg.thumb)], { type: 'image/jpeg' }));
+      renderThumbs();
+    }
+  } else if (msg.type === 'done') {
+    setStatus('Moodboard created!', 'success'); updateGenerateBtn();
+  } else if (msg.type === 'error') {
+    setStatus(msg.message || 'Something went wrong.', 'error'); updateGenerateBtn();
+  }
+};
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+let statusFadeTimer = null;
+function setStatus(msg, type) {
+  statusEl.textContent = msg;
+  statusEl.className = type || '';
+  statusEl.style.opacity = '1';
+  if (statusFadeTimer) clearTimeout(statusFadeTimer);
+  if (msg && type !== 'error') {
+    statusFadeTimer = setTimeout(() => { statusEl.style.opacity = '0'; }, 30000);
+  }
+}
+
+function refreshSliderFill(slider) {
+  const min = parseFloat(slider.min) || 0;
+  const max = parseFloat(slider.max) || 100;
+  const pct = ((parseFloat(slider.value) || 0) - min) / (max - min) * 100;
+  slider.style.background = `linear-gradient(to right, var(--accent) ${pct}%, var(--input) ${pct}%)`;
+}
+document.querySelectorAll('input[type="range"]').forEach(s => refreshSliderFill(s));
+
+renderThumbs();
+</script>
+</body>
+</html>
