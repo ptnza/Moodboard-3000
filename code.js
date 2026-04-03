@@ -51,6 +51,8 @@ function extractSelectionImages() {
         height: node.height,
         name:   node.name,
         thumb:  null,
+        imageTransform: fill.imageTransform || null,
+        sourceScaleMode: fill.scaleMode || 'FILL',
       });
       break;
     }
@@ -129,21 +131,11 @@ function handleRegisterImage(msg) {
 // ── Generate handler ──────────────────────────────────────────────────────────
 async function handleGenerate(images, config) {
   try {
-    // For selection images with a nodeId, export the node to capture crop/transform
-    var resolved = [];
-    for (var i = 0; i < images.length; i++) {
-      var img = images[i];
+    var resolved = images.map(function(img) {
       var hash = img.hash;
-      if (img.nodeId) {
-        var node = await figma.getNodeByIdAsync(img.nodeId);
-        if (node) {
-          var bytes = await node.exportAsync({ format: 'PNG' });
-          hash = figma.createImage(bytes).hash;
-        }
-      }
       if (!hash) throw new Error('Image not registered: ' + img.name);
-      resolved.push(Object.assign({}, img, { hash: hash }));
-    }
+      return Object.assign({}, img, { hash: hash });
+    });
 
     var frame = await buildMoodboard(resolved, config);
     figma.viewport.scrollAndZoomIntoView([frame]);
@@ -228,7 +220,9 @@ async function buildMoodboard(images, cfg) {
     rect.resize(innerW, innerH);
     rect.x = cellPadding;
     rect.y = cellPadding;
-    rect.fills = [{ type: 'IMAGE', scaleMode: scaleMode, imageHash: img.hash }];
+    var imgFill = { type: 'IMAGE', scaleMode: scaleMode, imageHash: img.hash };
+    if (img.imageTransform) imgFill.imageTransform = img.imageTransform;
+    rect.fills = [imgFill];
   }
 
   return frame;

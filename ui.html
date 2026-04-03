@@ -664,7 +664,8 @@ function addFromSelection(rawImages) {
       blobUrl = URL.createObjectURL(blob);
     }
     images.push({ id: img.nodeId || img.id || img.hash, type: 'selection', hash: img.hash,
-      nodeId: img.nodeId, width: img.width, height: img.height, name: img.name, blobUrl });
+      nodeId: img.nodeId, width: img.width, height: img.height, name: img.name, blobUrl,
+      imageTransform: img.imageTransform || null, sourceScaleMode: img.sourceScaleMode || null });
   }
   renderThumbs();
 }
@@ -815,6 +816,7 @@ generateBtn.addEventListener('click', () => {
   const imagePayload = images.map(img => ({
     id: img.id, hash: img.hash || null, nodeId: img.nodeId || null,
     width: img.width, height: img.height, name: img.name,
+    imageTransform: img.imageTransform || null, sourceScaleMode: img.sourceScaleMode || null,
   }));
 
   parent.postMessage({ pluginMessage: { type: 'generate', images: imagePayload, config } }, '*');
