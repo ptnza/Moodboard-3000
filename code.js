@@ -146,6 +146,43 @@ async function handleGenerate(images, config) {
   }
 }
 
+// ── Aspect-ratio image-to-slot matching ──────────────────────────────────────
+// Swaps imgIdx assignments so images fill cells whose aspect ratio best matches
+// their own.  preserveIdx: imgIdx values to keep in place (e.g. hero = [0]).
+function matchImagesByAR(cells, images, preserveIdx) {
+  if (cells.length <= 1 || images.length <= 1) return;
+  var kept = {};
+  for (var i = 0; i < preserveIdx.length; i++) kept[preserveIdx[i]] = true;
+
+  var swap = [];
+  for (var i = 0; i < cells.length; i++) {
+    var idx = cells[i].imgIdx !== undefined ? cells[i].imgIdx : i;
+    if (!kept[idx]) swap.push(i);
+  }
+  if (swap.length <= 1) return;
+
+  // Sort cell indices by slot AR (tallest first → widest last)
+  swap.sort(function(a, b) {
+    return (cells[a].width / cells[a].height) - (cells[b].width / cells[b].height);
+  });
+
+  // Collect and sort the corresponding image indices by image AR
+  var imgIds = [];
+  for (var i = 0; i < swap.length; i++) {
+    imgIds.push(cells[swap[i]].imgIdx !== undefined ? cells[swap[i]].imgIdx : swap[i]);
+  }
+  imgIds.sort(function(a, b) {
+    var arA = (images[a % images.length].width / images[a % images.length].height) || 1;
+    var arB = (images[b % images.length].width / images[b % images.length].height) || 1;
+    return arA - arB;
+  });
+
+  // Zip: tallest slot ← tallest image, widest slot ← widest image
+  for (var i = 0; i < swap.length; i++) {
+    cells[swap[i]].imgIdx = imgIds[i];
+  }
+}
+
 // ── Main builder ──────────────────────────────────────────────────────────────
 async function buildMoodboard(images, cfg) {
   var preset       = cfg.preset;
@@ -168,6 +205,12 @@ async function buildMoodboard(images, cfg) {
     cluster:    layoutCluster,
   };
   var cells = (layoutFns[layout] || layoutGrid)(images, layoutCfg);
+
+  // Match images to cells by aspect ratio (editorial/cluster assign sequentially;
+  // grid and masonry already honour image ARs in their sizing).
+  if (layout === 'editorial' || layout === 'cluster') {
+    matchImagesByAR(cells, images, layout === 'editorial' ? [0] : []);
+  }
 
   var now = new Date();
   var ts  = pad(now.getHours()) + ':' + pad(now.getMinutes());

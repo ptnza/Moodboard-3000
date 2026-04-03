@@ -30,29 +30,14 @@ No dragging. No nudging. No "eh, that works."
 
 ## Install
 
-Moodboard 3000 isn't on the Figma Community yet — install it locally from this repo.
+Moodboard 3000 isn't on the Figma Community yet — install it locally in a few clicks.
 
-### 1. Download
+1. **[Download ZIP](https://github.com/ptnza/Moodboard-3000/archive/refs/heads/main.zip)** and unzip
+2. Open the **Figma desktop app**
+3. Go to **Plugins → Development → Import plugin from manifest...**
+4. Select the `manifest.json` file from the unzipped folder
 
-**[Download ZIP](https://github.com/ptnza/Moodboard-3000/archive/refs/heads/main.zip)** and unzip.
-
-Or clone with git:
-
-```bash
-git clone https://github.com/ptnza/Moodboard-3000.git
-```
-
-### 2. Load into Figma
-
-1. Open the **Figma desktop app**
-2. Go to **Plugins → Development → Import plugin from manifest…**
-3. Select the `manifest.json` file from this repo
-
-The plugin will now appear under:
-
-```
-Plugins → Development → Moodboard 3000
-```
+The plugin will now appear under **Plugins → Development → Moodboard 3000**.
 
 > **Note:** Local plugins only work in the Figma desktop app (not browser).
 
@@ -103,6 +88,23 @@ Most tools treat image layout like a grid problem. This treats it like compositi
 
 Started as "I just need a quick moodboard."
 Turned into "why does nothing do this well?"
+
+---
+
+## Release Notes
+
+### v1.2 — Aspect-ratio matching (2026-04-03)
+
+- Images now fill slots whose aspect ratio best matches their own in Editorial and Cluster layouts
+- Tall images land in tall slots, wide images in wide slots — less cropping, more intentional compositions
+- Grid and Masonry already honored aspect ratios and are unchanged
+- Hero image (first selected) is always preserved in Editorial layouts
+
+### v1.1 — Justified rows, duplicates, crop-aware export
+
+- Grid layout rewritten as justified rows (images packed by aspect ratio, filling each row edge to edge)
+- Duplicate image support
+- Crop-aware export using imageTransform
 
 ---
 
