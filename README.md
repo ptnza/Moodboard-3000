@@ -32,13 +32,15 @@ No dragging. No nudging. No "eh, that works."
 
 Moodboard 3000 isn't on the Figma Community yet — install it locally from this repo.
 
-### 1. Clone or download
+### 1. Download
+
+**[Download ZIP](https://github.com/ptnza/Moodboard-3000/archive/refs/heads/main.zip)** and unzip.
+
+Or clone with git:
 
 ```bash
 git clone https://github.com/ptnza/Moodboard-3000.git
 ```
-
-Or download as ZIP and unzip.
 
 ### 2. Load into Figma
 
@@ -60,7 +62,7 @@ Plugins → Development → Moodboard 3000
 
 | Mode | Description |
 |------|-------------|
-| **Grid** | Clean, structured rows. Simple, but not rigid. |
+| **Grid** | Justified rows — images sized by aspect ratio, filling each row edge to edge. |
 | **Editorial** | Composed, full-frame layouts with varied scale. |
 | **Masonry** | Pinterest-style flow. Loose, but still structured. |
 | **Cluster** | Organic, center-weighted. Slightly chaotic (in a good way). |

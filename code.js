@@ -39,13 +39,14 @@ function extractSelectionImages() {
 
   for (var ni = 0; ni < selection.length; ni++) {
     var node = selection[ni];
-    if (!('fills' in node)) continue;
+    if (!('fills' in node) || seen.has(node.id)) continue;
+    seen.add(node.id);
     for (var fi = 0; fi < node.fills.length; fi++) {
       var fill = node.fills[fi];
-      if (fill.type !== 'IMAGE' || !fill.imageHash || seen.has(fill.imageHash)) continue;
-      seen.add(fill.imageHash);
+      if (fill.type !== 'IMAGE' || !fill.imageHash) continue;
       results.push({
         hash:   fill.imageHash,
+        nodeId: node.id,
         width:  node.width,
         height: node.height,
         name:   node.name,
@@ -64,18 +65,18 @@ function loadThumbsAsync(selection) {
   var seen = new Set();
   for (var ni = 0; ni < selection.length; ni++) {
     var node = selection[ni];
-    if (!('fills' in node)) continue;
+    if (!('fills' in node) || seen.has(node.id)) continue;
+    seen.add(node.id);
     for (var fi = 0; fi < node.fills.length; fi++) {
       var fill = node.fills[fi];
-      if (fill.type !== 'IMAGE' || !fill.imageHash || seen.has(fill.imageHash)) continue;
-      seen.add(fill.imageHash);
-      (function(hash, n) {
+      if (fill.type !== 'IMAGE' || !fill.imageHash) continue;
+      (function(nodeId, n) {
         n.exportAsync({ format: 'JPG', constraint: { type: 'WIDTH', value: 80 } })
           .then(function(bytes) {
-            figma.ui.postMessage({ type: 'thumb-update', hash: hash, thumb: Array.from(bytes) });
+            figma.ui.postMessage({ type: 'thumb-update', nodeId: nodeId, thumb: Array.from(bytes) });
           })
           .catch(function() {});
-      })(fill.imageHash, node);
+      })(node.id, node);
       break;
     }
   }
@@ -128,11 +129,21 @@ function handleRegisterImage(msg) {
 // ── Generate handler ──────────────────────────────────────────────────────────
 async function handleGenerate(images, config) {
   try {
-    var resolved = images.map(function(img) {
+    // For selection images with a nodeId, export the node to capture crop/transform
+    var resolved = [];
+    for (var i = 0; i < images.length; i++) {
+      var img = images[i];
       var hash = img.hash;
+      if (img.nodeId) {
+        var node = await figma.getNodeByIdAsync(img.nodeId);
+        if (node) {
+          var bytes = await node.exportAsync({ format: 'PNG' });
+          hash = figma.createImage(bytes).hash;
+        }
+      }
       if (!hash) throw new Error('Image not registered: ' + img.name);
-      return Object.assign({}, img, { hash: hash });
-    });
+      resolved.push(Object.assign({}, img, { hash: hash }));
+    }
 
     var frame = await buildMoodboard(resolved, config);
     figma.viewport.scrollAndZoomIntoView([frame]);
@@ -224,9 +235,9 @@ async function buildMoodboard(images, cfg) {
 }
 
 // ── Layout: Justified Rows (Grid) ─────────────────────────────────────────────
-// Images are packed into rows of equal height per row.  Each row fills the
-// full available width; row heights vary by the aspect ratios of their images.
-// All rows are then scaled proportionally so the composition fills the frame.
+// Uses dynamic programming (linear partition) to split images into R rows that
+// minimise row-height variance.  Tries every viable row count; picks the one
+// whose scaled heights are most uniform.
 function layoutGrid(images, cfg) {
   var W = cfg.width, H = cfg.height, P = cfg.padding, G = cfg.gap;
   var n = images.length;
@@ -237,7 +248,7 @@ function layoutGrid(images, cfg) {
 
   if (n === 1) return [{ x: P, y: P, width: availW, height: availH, scaleMode: 'FILL' }];
 
-  // Aspect ratios
+  // Aspect ratios and prefix sums
   var ratios = [];
   var sumAR = 0;
   for (var i = 0; i < n; i++) {
@@ -245,30 +256,82 @@ function layoutGrid(images, cfg) {
     ratios.push(ar);
     sumAR += ar;
   }
+  var prefixAR = [0];
+  for (var i = 0; i < n; i++) prefixAR.push(prefixAR[i] + ratios[i]);
 
-  // Target row height — derived from area so rows are roughly square-ish cells
-  var targetH = Math.sqrt(availW * availH / sumAR);
+  // Row height for images [a..b] filling availW
+  function rowH(a, b) {
+    var cnt = b - a + 1;
+    var ar = prefixAR[b + 1] - prefixAR[a];
+    return (availW - (cnt - 1) * G) / ar;
+  }
 
-  // Greedy row assignment: keep adding images until the row's natural height
-  // (the height that makes the row exactly fill availW) drops below targetH.
-  var rowDefs = [];
-  var rowStart = 0;
-  var rowAR = 0;
-  for (var i = 0; i < n; i++) {
-    rowAR += ratios[i];
-    var count = i - rowStart + 1;
-    var rowH = (availW - (count - 1) * G) / rowAR;
+  // Ideal row height → estimate ideal row count
+  var idealH = Math.sqrt(availW * availH / sumAR);
+  var idealR = Math.max(2, Math.round(availH / (idealH + G)));
 
-    if (rowH < targetH && count > 1 && i < n - 1) {
-      // Row got too short — commit the row WITHOUT this image
-      var prevAR = rowAR - ratios[i];
-      rowDefs.push({ start: rowStart, end: i - 1, ar: prevAR, count: count - 1 });
-      rowStart = i;
-      rowAR = ratios[i];
+  // Try a range of row counts around the ideal and pick the best
+  var bestPartition = null;
+  var bestScore = Infinity;
+  var minR = Math.max(2, idealR - 3);
+  var maxR = Math.min(n, idealR + 3);
+
+  for (var R = minR; R <= maxR; R++) {
+    // Target row height for this R
+    var targetRH = (availH - (R - 1) * G) / R;
+
+    // DP: partition n images into R rows, minimising sum of squared deviation
+    // from targetRH.  cost[i][k] = best cost for first i images in k rows.
+    var cost = [];
+    var breaks = [];
+    for (var i = 0; i <= n; i++) {
+      cost.push([]);
+      breaks.push([]);
+      for (var k = 0; k <= R; k++) {
+        cost[i].push(Infinity);
+        breaks[i].push(0);
+      }
+    }
+    cost[0][0] = 0;
+
+    for (var k = 1; k <= R; k++) {
+      for (var i = k; i <= n; i++) {
+        for (var j = k - 1; j < i; j++) {
+          var h = rowH(j, i - 1);
+          var dev = h - targetRH;
+          var c = cost[j][k - 1] + dev * dev;
+          if (c < cost[i][k]) {
+            cost[i][k] = c;
+            breaks[i][k] = j;
+          }
+        }
+      }
+    }
+
+    if (cost[n][R] === Infinity) continue;
+
+    // Reconstruct partition
+    var partition = [];
+    var pos = n;
+    for (var k = R; k >= 1; k--) {
+      var start = breaks[pos][k];
+      partition.unshift({ start: start, end: pos - 1 });
+      pos = start;
+    }
+
+    if (cost[n][R] < bestScore) {
+      bestScore = cost[n][R];
+      bestPartition = partition;
     }
   }
-  // Last row
-  rowDefs.push({ start: rowStart, end: n - 1, ar: rowAR, count: n - rowStart });
+
+  // Build rowDefs from best partition
+  var rowDefs = [];
+  for (var r = 0; r < bestPartition.length; r++) {
+    var p = bestPartition[r];
+    var ar = prefixAR[p.end + 1] - prefixAR[p.start];
+    rowDefs.push({ start: p.start, end: p.end, ar: ar, count: p.end - p.start + 1 });
+  }
 
   // Natural height for each row (height that fills availW exactly)
   var naturalH = [];
