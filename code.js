@@ -157,7 +157,10 @@ function matchImagesByAR(cells, images, preserveIdx) {
   var swap = [];
   for (var i = 0; i < cells.length; i++) {
     var idx = cells[i].imgIdx !== undefined ? cells[i].imgIdx : i;
-    if (!kept[idx]) swap.push(i);
+    if (kept[idx]) continue;
+    // Skip cropped images — their imageTransform is tied to the original node's proportions
+    if (images[idx % images.length].imageTransform) continue;
+    swap.push(i);
   }
   if (swap.length <= 1) return;
 
@@ -181,6 +184,21 @@ function matchImagesByAR(cells, images, preserveIdx) {
   for (var i = 0; i < swap.length; i++) {
     cells[swap[i]].imgIdx = imgIds[i];
   }
+}
+
+// Compose a user's source crop transform with a FILL into the target cell.
+// Shows the cropped region, center-fitted into the new cell, no stretching.
+function composeCropFill(srcT, cellW, cellH, cropW, cropH) {
+  var nodeAR = cellW / cellH;
+  var cropAR = cropW / cropH;
+  var fsx, fsy;
+  if (cropAR > nodeAR) { fsx = nodeAR / cropAR; fsy = 1; }
+  else                 { fsx = 1; fsy = cropAR / nodeAR; }
+  var ftx = (1 - fsx) / 2;
+  var fty = (1 - fsy) / 2;
+  var sx = srcT[0][0], tx = srcT[0][2];
+  var sy = srcT[1][1], ty = srcT[1][2];
+  return [[sx * fsx, 0, sx * ftx + tx], [0, sy * fsy, sy * fty + ty]];
 }
 
 // ── Main builder ──────────────────────────────────────────────────────────────
@@ -264,7 +282,10 @@ async function buildMoodboard(images, cfg) {
     rect.x = cellPadding;
     rect.y = cellPadding;
     var imgFill = { type: 'IMAGE', scaleMode: scaleMode, imageHash: img.hash };
-    if (img.imageTransform) imgFill.imageTransform = img.imageTransform;
+    if (img.imageTransform) {
+      imgFill.scaleMode = 'CROP';
+      imgFill.imageTransform = composeCropFill(img.imageTransform, innerW, innerH, img.width, img.height);
+    }
     rect.fills = [imgFill];
   }
 
