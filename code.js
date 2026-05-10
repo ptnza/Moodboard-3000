@@ -1,7 +1,7 @@
 // Moodboard Maker — code.js
 // Plugin sandbox: has access to the figma global, no DOM.
 
-figma.showUI(__html__, { width: 320, height: 620, title: 'Moodboard 3000', themeColors: true });
+figma.showUI(__html__, { width: 300, height: 500, title: 'Moodboard 3000', themeColors: true });
 
 // Maps UI image IDs → Figma image hashes (populated as uploads are registered)
 var imageRegistry = {};
@@ -10,12 +10,49 @@ var chunkBuffers  = {};
 
 figma.ui.postMessage({ type: 'init', images: extractSelectionImages() });
 loadThumbsAsync(figma.currentPage.selection);
+postSelectionState();
+
+figma.on('selectionchange', function() {
+  postSelectionState();
+});
+
+// Re-fire selection-state when the selected frame is resized so the button can
+// flip Shuffle ↔ Fit to Frame live as the user drags a corner.
+// In dynamic-page mode, documentchange requires loadAllPagesAsync() first;
+// wrap in async IIFE so registration happens after the load resolves.
+(async function registerDocumentChangeListener() {
+  try {
+    await figma.loadAllPagesAsync();
+  } catch (e) {
+    console.error('[MB3K] loadAllPagesAsync failed:', e);
+    return;
+  }
+  figma.on('documentchange', function(event) {
+    var sel = figma.currentPage.selection;
+    if (!sel.length) return;
+    var selIds = {};
+    for (var i = 0; i < sel.length; i++) selIds[sel[i].id] = true;
+    for (var j = 0; j < event.documentChanges.length; j++) {
+      var ch = event.documentChanges[j];
+      if (ch.type !== 'PROPERTY_CHANGE') continue;
+      if (!selIds[ch.id]) continue;
+      if (ch.properties && (ch.properties.indexOf('width') !== -1 || ch.properties.indexOf('height') !== -1)) {
+        postSelectionState();
+        return;
+      }
+    }
+  });
+})();
 
 // ── Message handler ───────────────────────────────────────────────────────────
 figma.ui.onmessage = async function(msg) {
   switch (msg.type) {
     case 'generate':
-      await handleGenerate(msg.images, msg.config);
+      await handleGenerate(msg.images, msg.config, msg.frameId || null);
+      break;
+    case 're-roll':
+      console.log('[MB3K] re-roll msg received, frameId:', msg.frameId, 'panel images:', (msg.images || []).length, 'overrideMode:', msg.overrideMode || '(none)');
+      await handleReRoll(msg.frameId, msg.config, msg.images || null, msg.overrideMode || null);
       break;
     case 'register-image':
       handleRegisterImage(msg);
@@ -29,6 +66,54 @@ figma.ui.onmessage = async function(msg) {
       break;
   }
 };
+
+// ── Selection state (frame detection for "bring your own frame") ─────────────
+function getSelectedFrameInfo() {
+  var sel = figma.currentPage.selection;
+  for (var i = 0; i < sel.length; i++) {
+    if (sel[i].type === 'FRAME') {
+      var n = sel[i];
+      var mb3k = null;
+      try {
+        var raw = n.getPluginData('mb3k');
+        if (raw) mb3k = JSON.parse(raw);
+      } catch (e) {
+        // Marker present but unparseable — treat as MB3K with unknown schema
+        mb3k = { __unknown: true };
+      }
+      return {
+        id:     n.id,
+        name:   n.name,
+        width:  Math.round(n.width),
+        height: Math.round(n.height),
+        mb3k:   mb3k,
+      };
+    }
+  }
+  return null;
+}
+
+function postSelectionState() {
+  figma.ui.postMessage({ type: 'selection-state', frame: getSelectedFrameInfo(), selectionImageCount: countSelectionImages() });
+}
+
+function countSelectionImages() {
+  var count = 0;
+  var seen = new Set();
+  var selection = figma.currentPage.selection;
+  for (var ni = 0; ni < selection.length; ni++) {
+    var node = selection[ni];
+    if (!('fills' in node) || seen.has(node.id)) continue;
+    seen.add(node.id);
+    for (var fi = 0; fi < node.fills.length; fi++) {
+      var fill = node.fills[fi];
+      if (fill.type !== 'IMAGE' || !fill.imageHash) continue;
+      count++;
+      break;
+    }
+  }
+  return count;
+}
 
 // ── Selection image extraction ────────────────────────────────────────────────
 // Fully synchronous — uses node dimensions directly, no async API calls.
@@ -129,7 +214,7 @@ function handleRegisterImage(msg) {
 }
 
 // ── Generate handler ──────────────────────────────────────────────────────────
-async function handleGenerate(images, config) {
+async function handleGenerate(images, config, frameId) {
   try {
     var resolved = images.map(function(img) {
       var hash = img.hash;
@@ -137,19 +222,168 @@ async function handleGenerate(images, config) {
       return Object.assign({}, img, { hash: hash });
     });
 
-    var frame = await buildMoodboard(resolved, config);
+    var targetFrame = null;
+    if (frameId) {
+      var node = await figma.getNodeByIdAsync(frameId);
+      if (!node || node.type !== 'FRAME') {
+        throw new Error('Selected frame is no longer available — try refreshing.');
+      }
+      targetFrame = node;
+    }
+
+    var frame = await buildMoodboard(resolved, config, targetFrame);
     figma.viewport.scrollAndZoomIntoView([frame]);
-    figma.ui.postMessage({ type: 'done' });
+    postSelectionState();  // sync UI so a freshly-generated frame reads as MB3K
+    figma.ui.postMessage({ type: 'done', kind: 'created' });
   } catch (err) {
     console.error('Generation failed:', err);
     figma.ui.postMessage({ type: 'error', message: String(err) });
   }
 }
 
+// ── Re-roll handler ──────────────────────────────────────────────────────────
+// Reads existing MB3K frame's children to recover image hashes + source crops,
+// clears children, re-runs buildMoodboard with the marker's stored mode and the
+// panel's current visual settings.
+async function handleReRoll(frameId, partialCfg, panelImages, overrideMode) {
+  console.log('[MB3K] handleReRoll start, frameId:', frameId, 'overrideMode:', overrideMode || '(none)');
+  try {
+    var node = await figma.getNodeByIdAsync(frameId);
+    console.log('[MB3K] node lookup:', node ? (node.type + ' "' + node.name + '"') : 'null');
+    if (!node || node.type !== 'FRAME') {
+      throw new Error('Selected frame is no longer available — try refreshing.');
+    }
+
+    var raw = node.getPluginData('mb3k');
+    console.log('[MB3K] marker raw string:', JSON.stringify(raw));
+    if (!raw) throw new Error('This frame was not generated by Moodboard 3000.');
+    var mb3k;
+    try { mb3k = JSON.parse(raw); } catch (e) {
+      throw new Error('Frame metadata is unreadable — cannot shuffle.');
+    }
+    console.log('[MB3K] marker parsed:', JSON.stringify(mb3k));
+    if (!mb3k || !mb3k.mode) {
+      throw new Error('Frame metadata is missing layout info — cannot shuffle.');
+    }
+
+    // Image source: panel state wins if it has ≥5 ready images; else fall back
+    // to reconstructing from the frame's existing cells. Frame is always the
+    // container regardless of source.
+    var images = null;
+    var sourceLabel = 'frame';
+    if (panelImages && panelImages.length) {
+      var ready = panelImages.filter(function(img) { return !!img.hash; });
+      if (ready.length >= 5) {
+        images = ready.map(function(img) { return Object.assign({}, img); });
+        sourceLabel = 'panel';
+      }
+    }
+    if (!images) {
+      images = await reconstructImagesFromFrame(node);
+    }
+    console.log('[MB3K] image source:', sourceLabel, '— count:', images.length);
+    if (images.length < 5) {
+      throw new Error('Need at least 5 images — add more to the panel or check the frame contents.');
+    }
+
+    // overrideMode = panel layout when user clicked Fit-to-Frame on a resized
+    // MB3K frame. In that case mode comes from the panel, variance is off
+    // (deterministic re-fit), and the pre-shuffle is skipped.
+    var resolvedMode = overrideMode || mb3k.mode;
+    var doVariance   = !overrideMode;
+
+    if (doVariance) {
+      // Fisher-Yates so Grid/Masonry get a new input order on re-roll.
+      for (var s = images.length - 1; s > 0; s--) {
+        var t = Math.floor(Math.random() * (s + 1));
+        var tmp = images[s]; images[s] = images[t]; images[t] = tmp;
+      }
+      console.log('[MB3K] images shuffled');
+    }
+
+    console.log('[MB3K] clearing children, current count:', node.children.length);
+    // Wipe children. Marker's presence is the consent signal.
+    for (var k = node.children.length - 1; k >= 0; k--) {
+      node.children[k].remove();
+    }
+    console.log('[MB3K] children cleared, remaining:', node.children.length);
+
+    var cfg = {
+      preset: { width: Math.round(node.width), height: Math.round(node.height) },
+      layout: resolvedMode,
+      gap:          partialCfg.gap,
+      padding:      partialCfg.padding,
+      bgColor:      partialCfg.bgColor,
+      cornerRadius: partialCfg.cornerRadius,
+    };
+
+    console.log('[MB3K] calling buildMoodboard with mode:', cfg.layout, 'targetFrame:', node.name, 'variance:', doVariance);
+    var frame = await buildMoodboard(images, cfg, node, doVariance);
+    console.log('[MB3K] buildMoodboard complete, child count:', frame.children.length);
+    figma.viewport.scrollAndZoomIntoView([frame]);
+    postSelectionState();  // sync UI: marker's w/h + generatedAt were rewritten
+    figma.ui.postMessage({ type: 'done', kind: overrideMode ? 'fit' : 'shuffled' });
+  } catch (err) {
+    console.error('[MB3K] Re-roll failed:', err);
+    figma.ui.postMessage({ type: 'error', message: String(err) });
+  }
+}
+
+// Walk frame.children (cells) → first rect inside each cell → read mb3k_src.
+// Fallback: if mb3k_src missing/unparseable, derive from current image fill +
+// figma.getImageByHash for source dims; treat as scaleMode FILL (no crop).
+async function reconstructImagesFromFrame(frame) {
+  var images = [];
+  for (var i = 0; i < frame.children.length; i++) {
+    var cell = frame.children[i];
+    if (cell.type !== 'FRAME') continue;
+    for (var j = 0; j < cell.children.length; j++) {
+      var rect = cell.children[j];
+      if (rect.type !== 'RECTANGLE') continue;
+
+      var src = null;
+      try {
+        var srcRaw = rect.getPluginData('mb3k_src');
+        if (srcRaw) src = JSON.parse(srcRaw);
+      } catch (e) { src = null; }
+
+      if (!src || !src.hash) {
+        var f = (rect.fills && rect.fills[0]) || null;
+        if (f && f.type === 'IMAGE' && f.imageHash) {
+          var w = 1000, h = 1000;
+          try {
+            var fimg = figma.getImageByHash(f.imageHash);
+            if (fimg) {
+              var sz = await fimg.getSizeAsync();
+              if (sz && sz.width && sz.height) { w = sz.width; h = sz.height; }
+            }
+          } catch (e) {}
+          src = { hash: f.imageHash, width: w, height: h, scaleMode: 'FILL', imageTransform: null };
+        }
+      }
+
+      if (src && src.hash) {
+        images.push({
+          hash:            src.hash,
+          width:           src.width  || 1000,
+          height:          src.height || 1000,
+          name:            'cell-' + i,
+          imageTransform:  src.imageTransform || null,
+          sourceScaleMode: src.scaleMode || 'FILL',
+        });
+      }
+      break; // only first rect in each cell
+    }
+  }
+  return images;
+}
+
 // ── Aspect-ratio image-to-slot matching ──────────────────────────────────────
 // Swaps imgIdx assignments so images fill cells whose aspect ratio best matches
 // their own.  preserveIdx: imgIdx values to keep in place (e.g. hero = [0]).
-function matchImagesByAR(cells, images, preserveIdx) {
+// randomize: if true, shuffle imgIds within AR-buckets so re-rolls vary while
+// AR-matching still holds. Used by Editorial; Cluster stays deterministic.
+function matchImagesByAR(cells, images, preserveIdx, randomize) {
   if (cells.length <= 1 || images.length <= 1) return;
   var kept = {};
   for (var i = 0; i < preserveIdx.length; i++) kept[preserveIdx[i]] = true;
@@ -180,6 +414,29 @@ function matchImagesByAR(cells, images, preserveIdx) {
     return arA - arB;
   });
 
+  // Within-bucket shuffle: groups of consecutive sorted imgIds whose AR stays
+  // within 15% of the bucket-start AR get permuted. Cross-bucket order is
+  // preserved → tall images still land in tall slots, wide in wide.
+  if (randomize) {
+    var TOL = 0.15;
+    var bi = 0;
+    while (bi < imgIds.length) {
+      var arStart = (images[imgIds[bi] % images.length].width / images[imgIds[bi] % images.length].height) || 1;
+      var bj = bi + 1;
+      while (bj < imgIds.length) {
+        var arNext = (images[imgIds[bj] % images.length].width / images[imgIds[bj] % images.length].height) || 1;
+        if ((arNext - arStart) / arStart > TOL) break;
+        bj++;
+      }
+      // Fisher-Yates within imgIds[bi..bj-1]
+      for (var k = bj - 1; k > bi; k--) {
+        var t = bi + Math.floor(Math.random() * (k - bi + 1));
+        var tmp = imgIds[k]; imgIds[k] = imgIds[t]; imgIds[t] = tmp;
+      }
+      bi = bj;
+    }
+  }
+
   // Zip: tallest slot ← tallest image, widest slot ← widest image
   for (var i = 0; i < swap.length; i++) {
     cells[swap[i]].imgIdx = imgIds[i];
@@ -202,19 +459,26 @@ function composeCropFill(srcT, cellW, cellH, cropW, cropH) {
 }
 
 // ── Main builder ──────────────────────────────────────────────────────────────
-async function buildMoodboard(images, cfg) {
+async function buildMoodboard(images, cfg, targetFrame, reroll) {
   var preset       = cfg.preset;
   var layout       = cfg.layout;
   var gap          = cfg.gap;
   var padding      = cfg.padding;
   var bgColor      = cfg.bgColor;
-  var cellPadding  = cfg.cellPadding;
-  var cellBgColor  = cfg.cellBgColor;
   var cornerRadius = cfg.cornerRadius;
+  // V2.1.5: image-frame controls removed from UI. Cell padding is 0; cell fill is empty.
+  var cellPadding  = 0;
 
-  var W = preset.width;
-  var H = preset.height;
+  var W = targetFrame ? Math.round(targetFrame.width)  : preset.width;
+  var H = targetFrame ? Math.round(targetFrame.height) : preset.height;
   var layoutCfg = { width: W, height: H, padding: padding, gap: gap };
+
+  // Re-roll override: vary Editorial's family + seed so slot structure changes
+  // between rolls. Bucket-shuffle in matchImagesByAR handles image variance.
+  if (reroll && layout === 'editorial') {
+    layoutCfg.familyOverride = Math.floor(Math.random() * 5);
+    layoutCfg.seedOverride   = Math.floor(Math.random() * 3);
+  }
 
   var layoutFns = {
     grid:       layoutGrid,
@@ -226,25 +490,32 @@ async function buildMoodboard(images, cfg) {
 
   // Match images to cells by aspect ratio (editorial/cluster assign sequentially;
   // grid and masonry already honour image ARs in their sizing).
+  // Editorial randomizes within AR-buckets so re-rolls vary; Cluster stays
+  // deterministic here (its variance comes from layoutCluster's own seed).
   if (layout === 'editorial' || layout === 'cluster') {
-    matchImagesByAR(cells, images, layout === 'editorial' ? [0] : []);
+    matchImagesByAR(cells, images, layout === 'editorial' ? [0] : [], layout === 'editorial');
   }
 
-  var now = new Date();
-  var ts  = pad(now.getHours()) + ':' + pad(now.getMinutes());
-  var layoutLabels = {
-    grid: 'Grid ' + images.length, editorial: 'Editorial ' + images.length,
-    masonry: 'Masonry ' + images.length, cluster: 'Cluster ' + images.length,
-  };
-
-  var frame = figma.createFrame();
-  figma.currentPage.appendChild(frame);
-  frame.name = 'Moodboard 3000 \u2014 ' + (layoutLabels[layout] || layout) + ' \u2014 ' + ts;
-  frame.resize(W, H);
-  frame.fills  = [{ type: 'SOLID', color: hexToRgb(bgColor.hex), opacity: bgColor.opacity }];
-  frame.clipsContent = true;
-  frame.x = Math.round(figma.viewport.center.x - W / 2);
-  frame.y = Math.round(figma.viewport.center.y - H / 2);
+  var frame;
+  if (targetFrame) {
+    // Bring-your-own-frame: keep user's name, fills, position, parent. Append children.
+    frame = targetFrame;
+  } else {
+    var now = new Date();
+    var ts  = pad(now.getHours()) + ':' + pad(now.getMinutes());
+    var layoutLabels = {
+      grid: 'Grid ' + images.length, editorial: 'Editorial ' + images.length,
+      masonry: 'Masonry ' + images.length, cluster: 'Cluster ' + images.length,
+    };
+    frame = figma.createFrame();
+    figma.currentPage.appendChild(frame);
+    frame.name = 'Moodboard 3000 \u2014 ' + (layoutLabels[layout] || layout) + ' \u2014 ' + ts;
+    frame.resize(W, H);
+    frame.fills  = [{ type: 'SOLID', color: hexToRgb(bgColor.hex), opacity: bgColor.opacity }];
+    frame.clipsContent = true;
+    frame.x = Math.round(figma.viewport.center.x - W / 2);
+    frame.y = Math.round(figma.viewport.center.y - H / 2);
+  }
 
   for (var i = 0; i < cells.length; i++) {
     var cell = cells[i];
@@ -259,13 +530,10 @@ async function buildMoodboard(images, cfg) {
     cellFrame.resize(cellW, cellH);
     cellFrame.x = Math.round(cell.x);
     cellFrame.y = Math.round(cell.y);
-    cellFrame.fills = [{
-      type: 'SOLID',
-      color: hexToRgb(cellBgColor.hex),
-      opacity: cellBgColor.opacity,
-    }];
+    cellFrame.fills = [];  // V2.1.5: cell fill removed from UI; transparent wrapper
     cellFrame.cornerRadius = cornerRadius;
     cellFrame.clipsContent = true;
+    try { cellFrame.setPluginData('mb3k_child', '1'); } catch (e) {}
 
     var img = (cell.imgIdx !== undefined)
       ? images[cell.imgIdx % images.length]
@@ -287,7 +555,28 @@ async function buildMoodboard(images, cfg) {
       imgFill.imageTransform = composeCropFill(img.imageTransform, innerW, innerH, img.width, img.height);
     }
     rect.fills = [imgFill];
+    // Source metadata for re-roll: preserves source dims + crop transform
+    try {
+      rect.setPluginData('mb3k_src', JSON.stringify({
+        hash: img.hash,
+        width: img.width,
+        height: img.height,
+        scaleMode: img.sourceScaleMode || (img.imageTransform ? 'CROP' : 'FILL'),
+        imageTransform: img.imageTransform || null,
+      }));
+    } catch (e) {}
   }
+
+  try {
+    frame.setPluginData('mb3k', JSON.stringify({
+      version: 1,
+      mode: layout,
+      generatedAt: new Date().toISOString(),
+      imageCount: images.length,
+      width: W,
+      height: H,
+    }));
+  } catch (e) { /* non-fatal */ }
 
   return frame;
 }
@@ -704,9 +993,15 @@ function layoutEditorial(images, cfg) {
   // ── Composition family + within-family seed ───────────────────────────────
   // Family cycles with n%5; seed (n%3) shifts anchor targets slightly within
   // a family so consecutive image counts feel distinct even in the same family.
+  // Re-roll override: cfg.familyOverride / cfg.seedOverride force a fresh
+  // family + seed so slot structure varies between rolls, not just images.
   var FAMILIES = ['top_left', 'left_rail', 'top_band', 'offset_left', 'right_rail'];
-  var family = FAMILIES[n % FAMILIES.length];
-  var seed   = n % 3; // 0, 1, 2
+  var family = (cfg.familyOverride !== undefined && cfg.familyOverride !== null)
+    ? FAMILIES[cfg.familyOverride % FAMILIES.length]
+    : FAMILIES[n % FAMILIES.length];
+  var seed   = (cfg.seedOverride !== undefined && cfg.seedOverride !== null)
+    ? cfg.seedOverride
+    : n % 3; // 0, 1, 2
 
   // ── Hero size: 2×2 or 1×2 only. Never taller than 2 rows. ────────────────
   var heroCS    = (n < 9) ? 1 : 2;
