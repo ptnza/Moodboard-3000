@@ -1,0 +1,4 @@
+*.backup
+*.backup-*
+backups-log*
+.backups-log*

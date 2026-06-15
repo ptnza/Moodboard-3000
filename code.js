@@ -24,7 +24,7 @@ figma.on('selectionchange', function() {
   try {
     await figma.loadAllPagesAsync();
   } catch (e) {
-    console.error('[MB3K] loadAllPagesAsync failed:', e);
+    console.error('loadAllPagesAsync failed:', e);
     return;
   }
   figma.on('documentchange', function(event) {
@@ -51,7 +51,6 @@ figma.ui.onmessage = async function(msg) {
       await handleGenerate(msg.images, msg.config, msg.frameId || null);
       break;
     case 're-roll':
-      console.log('[MB3K] re-roll msg received, frameId:', msg.frameId, 'panel images:', (msg.images || []).length, 'overrideMode:', msg.overrideMode || '(none)');
       await handleReRoll(msg.frameId, msg.config, msg.images || null, msg.overrideMode || null);
       break;
     case 'register-image':
@@ -107,7 +106,9 @@ function countSelectionImages() {
     seen.add(node.id);
     for (var fi = 0; fi < node.fills.length; fi++) {
       var fill = node.fills[fi];
-      if (fill.type !== 'IMAGE' || !fill.imageHash) continue;
+      var isImage = fill.type === 'IMAGE' && fill.imageHash;
+      var isVideo = fill.type === 'VIDEO' && fill.videoHash;
+      if (!isImage && !isVideo) continue;
       count++;
       break;
     }
@@ -128,9 +129,11 @@ function extractSelectionImages() {
     seen.add(node.id);
     for (var fi = 0; fi < node.fills.length; fi++) {
       var fill = node.fills[fi];
-      if (fill.type !== 'IMAGE' || !fill.imageHash) continue;
-      results.push({
-        hash:   fill.imageHash,
+      var isImage = fill.type === 'IMAGE' && fill.imageHash;
+      var isVideo = fill.type === 'VIDEO' && fill.videoHash;
+      if (!isImage && !isVideo) continue;
+      var record = {
+        hash:   isVideo ? fill.videoHash : fill.imageHash,
         nodeId: node.id,
         width:  node.width,
         height: node.height,
@@ -138,7 +141,9 @@ function extractSelectionImages() {
         thumb:  null,
         imageTransform: fill.imageTransform || null,
         sourceScaleMode: fill.scaleMode || 'FILL',
-      });
+        fillType: fill.type,
+      };
+      results.push(record);
       break;
     }
   }
@@ -156,14 +161,45 @@ function loadThumbsAsync(selection) {
     seen.add(node.id);
     for (var fi = 0; fi < node.fills.length; fi++) {
       var fill = node.fills[fi];
-      if (fill.type !== 'IMAGE' || !fill.imageHash) continue;
-      (function(nodeId, n) {
+      var isImage = fill.type === 'IMAGE' && fill.imageHash;
+      var isVideo = fill.type === 'VIDEO' && fill.videoHash;
+      if (!isImage && !isVideo) continue;
+      (function(nodeId, n, imageHash, scaleMode, fillIsVideo) {
+        // 80px panel thumbnail (drives the visible thumb strip). Works for both
+        // image and video nodes — exportAsync returns the visible frame as JPG.
+        // Array.from(bytes) here is a known wasteful pattern; cleanup follow-up.
         n.exportAsync({ format: 'JPG', constraint: { type: 'WIDTH', value: 80 } })
           .then(function(bytes) {
             figma.ui.postMessage({ type: 'thumb-update', nodeId: nodeId, thumb: Array.from(bytes) });
-          })
-          .catch(function() {});
-      })(node.id, node);
+          });
+
+        // Video fills: skip detection entirely (center crop only).
+        if (fillIsVideo) {
+          figma.ui.postMessage({ type: 'detection-skip', nodeId: nodeId, reason: 'video' });
+          return;
+        }
+
+        // Detection source: skip entirely if the fill is user-cropped
+        // (scaleMode 'CROP'). The focal-shift gate in buildMoodboard ignores
+        // user-cropped images anyway — sending bytes + running detection
+        // would waste ~95ms per image. Tell the UI to mark focal as skipped.
+        if (scaleMode === 'CROP') {
+          figma.ui.postMessage({ type: 'detection-skip', nodeId: nodeId, reason: 'user-cropped' });
+          return;
+        }
+
+        // Detection source via getBytesAsync — returns the original encoded
+        // image bytes by hash, bypassing Figma's exportAsync render queue
+        // entirely. Sent as Uint8Array via structured clone (no Array.from
+        // — payload can be multi-MB; the array serialization would balloon
+        // it 5-10x). Receiver handles new Uint8Array(msg.bytes) generically.
+        var imgObj = figma.getImageByHash(imageHash);
+        if (!imgObj) return;
+        imgObj.getBytesAsync()
+          .then(function(bytes) {
+            figma.ui.postMessage({ type: 'detection-source', nodeId: nodeId, bytes: bytes });
+          });
+      })(node.id, node, isVideo ? fill.videoHash : fill.imageHash, fill.scaleMode || 'FILL', isVideo);
       break;
     }
   }
@@ -231,6 +267,14 @@ async function handleGenerate(images, config, frameId) {
       targetFrame = node;
     }
 
+    if (config.layout === 'editorial') {
+      config = Object.assign({}, config, {
+        familyOverride:       Math.floor(Math.random() * 5),
+        seedOverride:         Math.floor(Math.random() * 3),
+        miniTemplateOverride: Math.floor(Math.random() * 6)
+      });
+    }
+
     var frame = await buildMoodboard(resolved, config, targetFrame);
     figma.viewport.scrollAndZoomIntoView([frame]);
     postSelectionState();  // sync UI so a freshly-generated frame reads as MB3K
@@ -246,44 +290,33 @@ async function handleGenerate(images, config, frameId) {
 // clears children, re-runs buildMoodboard with the marker's stored mode and the
 // panel's current visual settings.
 async function handleReRoll(frameId, partialCfg, panelImages, overrideMode) {
-  console.log('[MB3K] handleReRoll start, frameId:', frameId, 'overrideMode:', overrideMode || '(none)');
   try {
     var node = await figma.getNodeByIdAsync(frameId);
-    console.log('[MB3K] node lookup:', node ? (node.type + ' "' + node.name + '"') : 'null');
     if (!node || node.type !== 'FRAME') {
       throw new Error('Selected frame is no longer available — try refreshing.');
     }
 
     var raw = node.getPluginData('mb3k');
-    console.log('[MB3K] marker raw string:', JSON.stringify(raw));
     if (!raw) throw new Error('This frame was not generated by Moodboard 3000.');
     var mb3k;
     try { mb3k = JSON.parse(raw); } catch (e) {
       throw new Error('Frame metadata is unreadable — cannot shuffle.');
     }
-    console.log('[MB3K] marker parsed:', JSON.stringify(mb3k));
     if (!mb3k || !mb3k.mode) {
       throw new Error('Frame metadata is missing layout info — cannot shuffle.');
     }
 
-    // Image source: panel state wins if it has ≥5 ready images; else fall back
-    // to reconstructing from the frame's existing cells. Frame is always the
-    // container regardless of source.
-    var images = null;
-    var sourceLabel = 'frame';
-    if (panelImages && panelImages.length) {
-      var ready = panelImages.filter(function(img) { return !!img.hash; });
-      if (ready.length >= 5) {
-        images = ready.map(function(img) { return Object.assign({}, img); });
-        sourceLabel = 'panel';
-      }
-    }
-    if (!images) {
-      images = await reconstructImagesFromFrame(node);
-    }
-    console.log('[MB3K] image source:', sourceLabel, '— count:', images.length);
+    // Image source: ALWAYS reconstruct from the frame's existing cells. Remix
+    // and Fit to Size operate on the contents the user can see in the selected
+    // frame, not whatever's in the panel — that's why the panel image strip
+    // dims when an MB3K frame is selected. Previously the panel won when it
+    // had ≥5 ready images, which caused a state collision.
+    // NOTE: `panelImages` is intentionally unused and left in the signature
+    // for wire-format stability. Cleanup candidate: drop the parameter and
+    // stop sending images in the re-roll payload from ui.html.
+    var images = await reconstructImagesFromFrame(node);
     if (images.length < 5) {
-      throw new Error('Need at least 5 images — add more to the panel or check the frame contents.');
+      throw new Error('This frame has fewer than 5 image cells. Add cells back or regenerate.');
     }
 
     // overrideMode = panel layout when user clicked Fit-to-Frame on a resized
@@ -298,15 +331,12 @@ async function handleReRoll(frameId, partialCfg, panelImages, overrideMode) {
         var t = Math.floor(Math.random() * (s + 1));
         var tmp = images[s]; images[s] = images[t]; images[t] = tmp;
       }
-      console.log('[MB3K] images shuffled');
     }
 
-    console.log('[MB3K] clearing children, current count:', node.children.length);
     // Wipe children. Marker's presence is the consent signal.
     for (var k = node.children.length - 1; k >= 0; k--) {
       node.children[k].remove();
     }
-    console.log('[MB3K] children cleared, remaining:', node.children.length);
 
     var cfg = {
       preset: { width: Math.round(node.width), height: Math.round(node.height) },
@@ -317,14 +347,22 @@ async function handleReRoll(frameId, partialCfg, panelImages, overrideMode) {
       cornerRadius: partialCfg.cornerRadius,
     };
 
-    console.log('[MB3K] calling buildMoodboard with mode:', cfg.layout, 'targetFrame:', node.name, 'variance:', doVariance);
+    // Apply the panel's current bgColor to the MB3K frame. buildMoodboard
+    // preserves targetFrame.fills (for BYO-frame Generate-into-frame), so
+    // Remix and Fit-to-Size on MB3K frames apply the panel color here.
+    var bg = partialCfg.bgColor;
+    if (bg && bg.hex) {
+      node.fills = [{ type: 'SOLID', color: hexToRgb(bg.hex), opacity: (bg.opacity != null ? bg.opacity : 1) }];
+    } else {
+      node.fills = [];
+    }
+
     var frame = await buildMoodboard(images, cfg, node, doVariance);
-    console.log('[MB3K] buildMoodboard complete, child count:', frame.children.length);
     figma.viewport.scrollAndZoomIntoView([frame]);
     postSelectionState();  // sync UI: marker's w/h + generatedAt were rewritten
     figma.ui.postMessage({ type: 'done', kind: overrideMode ? 'fit' : 'shuffled' });
   } catch (err) {
-    console.error('[MB3K] Re-roll failed:', err);
+    console.error('Re-roll failed:', err);
     figma.ui.postMessage({ type: 'error', message: String(err) });
   }
 }
@@ -349,16 +387,17 @@ async function reconstructImagesFromFrame(frame) {
 
       if (!src || !src.hash) {
         var f = (rect.fills && rect.fills[0]) || null;
-        if (f && f.type === 'IMAGE' && f.imageHash) {
+        if (f && ((f.type === 'IMAGE' && f.imageHash) || (f.type === 'VIDEO' && f.videoHash))) {
+          var fhash = (f.type === 'VIDEO') ? f.videoHash : f.imageHash;
           var w = 1000, h = 1000;
           try {
-            var fimg = figma.getImageByHash(f.imageHash);
+            var fimg = figma.getImageByHash(fhash);
             if (fimg) {
               var sz = await fimg.getSizeAsync();
               if (sz && sz.width && sz.height) { w = sz.width; h = sz.height; }
             }
           } catch (e) {}
-          src = { hash: f.imageHash, width: w, height: h, scaleMode: 'FILL', imageTransform: null };
+          src = { hash: fhash, width: w, height: h, scaleMode: 'FILL', imageTransform: null, fillType: f.type };
         }
       }
 
@@ -370,6 +409,14 @@ async function reconstructImagesFromFrame(frame) {
           name:            'cell-' + i,
           imageTransform:  src.imageTransform || null,
           sourceScaleMode: src.scaleMode || 'FILL',
+          // Backward-compat: frames generated before focal was stamped have
+          // no src.focal; falls back to null → center-crop, same as today.
+          focal:           src.focal || null,
+          // Backward-compat: pre-v3.0 frames have no fillType → default IMAGE.
+          fillType:        src.fillType || 'IMAGE',
+          // Video cells need nodeId to re-clone the source on remix.
+          // Null for images and for video frames where source was already gone.
+          nodeId:          src.sourceNodeId || null,
         });
       }
       break; // only first rect in each cell
@@ -392,8 +439,11 @@ function matchImagesByAR(cells, images, preserveIdx, randomize) {
   for (var i = 0; i < cells.length; i++) {
     var idx = cells[i].imgIdx !== undefined ? cells[i].imgIdx : i;
     if (kept[idx]) continue;
-    // Skip cropped images — their imageTransform is tied to the original node's proportions
-    if (images[idx % images.length].imageTransform) continue;
+    // Skip user-cropped images — their imageTransform is tied to the original node's proportions.
+    // sourceScaleMode is the authoritative "user applied a crop" signal; imageTransform is
+    // present on every IMAGE fill regardless of crop (Figma returns identity for FILL/FIT/TILE).
+    var _srcImg = images[idx % images.length];
+    if (_srcImg.sourceScaleMode === 'CROP' && _srcImg.imageTransform) continue;
     swap.push(i);
   }
   if (swap.length <= 1) return;
@@ -458,7 +508,29 @@ function composeCropFill(srcT, cellW, cellH, cropW, cropH) {
   return [[sx * fsx, 0, sx * ftx + tx], [0, sy * fsy, sy * fty + ty]];
 }
 
+// Build a CROP-mode imageTransform that keeps the focal point visible.
+// focal = {x, y} in 0–1 image-normalized coords; cellW/H = inner cell dims;
+// imgW/H = original image dims. Result is a 3×2 affine matrix in Figma's
+// image-normalized space (same convention as composeCropFill), clamped so the
+// cell stays fully covered by the image.
+function focalToImageTransform(focal, cellW, cellH, imgW, imgH) {
+  var imgRatio  = imgW  / imgH;
+  var cellRatio = cellW / cellH;
+  var sx, sy;
+  if (imgRatio > cellRatio) { sx = cellRatio / imgRatio; sy = 1; }
+  else                       { sx = 1; sy = imgRatio / cellRatio; }
+  var tx = focal.x - sx / 2;
+  var ty = focal.y - sy / 2;
+  if (tx < 0) tx = 0; else if (tx > 1 - sx) tx = 1 - sx;
+  if (ty < 0) ty = 0; else if (ty > 1 - sy) ty = 1 - sy;
+  return [[sx, 0, tx], [0, sy, ty]];
+}
+
 // ── Main builder ──────────────────────────────────────────────────────────────
+// Mini-template no-repeat memory: { [n]: lastPickedIndex } — keeps consecutive
+// re-rolls from picking the same template twice in a row.
+var lastMiniTemplate = {};
+
 async function buildMoodboard(images, cfg, targetFrame, reroll) {
   var preset       = cfg.preset;
   var layout       = cfg.layout;
@@ -472,12 +544,32 @@ async function buildMoodboard(images, cfg, targetFrame, reroll) {
   var W = targetFrame ? Math.round(targetFrame.width)  : preset.width;
   var H = targetFrame ? Math.round(targetFrame.height) : preset.height;
   var layoutCfg = { width: W, height: H, padding: padding, gap: gap };
+  // Forward Generate's caller-supplied randomisation overrides to layoutCfg.
+  if (cfg.familyOverride !== undefined) {
+    layoutCfg.familyOverride = cfg.familyOverride;
+    layoutCfg.seedOverride   = cfg.seedOverride;
+    if (cfg.miniTemplateOverride !== undefined) layoutCfg.miniTemplateOverride = cfg.miniTemplateOverride;
+  }
 
   // Re-roll override: vary Editorial's family + seed so slot structure changes
   // between rolls. Bucket-shuffle in matchImagesByAR handles image variance.
   if (reroll && layout === 'editorial') {
     layoutCfg.familyOverride = Math.floor(Math.random() * 5);
     layoutCfg.seedOverride   = Math.floor(Math.random() * 3);
+    // Mini-template no-repeat: pick a template index, never the same as last roll.
+    // Only n=5 reaches the mini path in product (5-image minimum upstream).
+    var miniN = images.length;
+    if (miniN === 5) {
+      var miniPoolSize = 6;
+      var miniLast = lastMiniTemplate[miniN];
+      var miniPool = [];
+      for (var mti = 0; mti < miniPoolSize; mti++) {
+        if (mti !== miniLast) miniPool.push(mti);
+      }
+      var miniPick = miniPool[Math.floor(Math.random() * miniPool.length)];
+      layoutCfg.miniTemplateOverride = miniPick;
+      lastMiniTemplate[miniN] = miniPick;
+    }
   }
 
   var layoutFns = {
@@ -543,26 +635,67 @@ async function buildMoodboard(images, cfg, targetFrame, reroll) {
     var innerH    = Math.max(1, cellH - 2 * cellPadding);
     var scaleMode = cell.scaleMode || 'FILL';
 
-    var rect = figma.createRectangle();
-    cellFrame.appendChild(rect);
+    var rect;
+    if (img.fillType === 'VIDEO') {
+      // Video cells: clone the source rect rather than rebuilding the fill.
+      // Figma's set_fills validator rejects videoHash on direct fills=[…] assignment
+      // ("Invalid SHA1 hash") — known API bug. Cloning + reparenting bypasses it
+      // and preserves the source's scaleMode/videoTransform (user crops honored).
+      var sourceNode = null;
+      try { sourceNode = await figma.getNodeByIdAsync(img.nodeId); } catch (e) { sourceNode = null; }
+      if (!sourceNode || sourceNode.removed || typeof sourceNode.clone !== 'function') {
+        // v3.0 limitation: video cells require the source node to remain on canvas
+        // (for Generate and for Remix). Leave the cellFrame empty and continue.
+        console.warn('[video] source node missing; cell left empty. nodeId:', img.nodeId);
+        continue;
+      }
+      rect = sourceNode.clone();
+      cellFrame.appendChild(rect);
+      rect.effects = [];
+      rect.strokes = [];
+      rect.strokeWeight = 0;
+      rect.rotation = 0;
+      rect.opacity = 1;
+      rect.blendMode = 'PASS_THROUGH';
+      rect.locked = false;
+      rect.cornerRadius = 0;
+    } else {
+      rect = figma.createRectangle();
+      cellFrame.appendChild(rect);
+    }
     rect.name = 'Image ' + idx;
     rect.resize(innerW, innerH);
     rect.x = cellPadding;
     rect.y = cellPadding;
-    var imgFill = { type: 'IMAGE', scaleMode: scaleMode, imageHash: img.hash };
-    if (img.imageTransform) {
-      imgFill.scaleMode = 'CROP';
-      imgFill.imageTransform = composeCropFill(img.imageTransform, innerW, innerH, img.width, img.height);
+    if (img.fillType !== 'VIDEO') {
+      var imgFill = { type: 'IMAGE', scaleMode: scaleMode, imageHash: img.hash };
+      if (img.sourceScaleMode === 'CROP' && img.imageTransform) {
+        imgFill.scaleMode = 'CROP';
+        imgFill.imageTransform = composeCropFill(img.imageTransform, innerW, innerH, img.width, img.height);
+      } else if (img.focal) {
+        // Subject-aware crop: only kick in if focal is meaningfully off-center
+        // (Euclidean distance from {0.5, 0.5} > 0.05). User pre-crops always win.
+        var dfx = img.focal.x - 0.5;
+        var dfy = img.focal.y - 0.5;
+        if (dfx * dfx + dfy * dfy > 0.0025) {
+          imgFill.scaleMode = 'CROP';
+          imgFill.imageTransform = focalToImageTransform(img.focal, innerW, innerH, img.width, img.height);
+        }
+      }
+      rect.fills = [imgFill];
     }
-    rect.fills = [imgFill];
-    // Source metadata for re-roll: preserves source dims + crop transform
+    // Source metadata for re-roll: preserves source dims + crop transform.
+    // Video cells also stamp sourceNodeId so Remix can re-clone the source.
     try {
       rect.setPluginData('mb3k_src', JSON.stringify({
         hash: img.hash,
         width: img.width,
         height: img.height,
-        scaleMode: img.sourceScaleMode || (img.imageTransform ? 'CROP' : 'FILL'),
+        scaleMode: img.sourceScaleMode || 'FILL',
         imageTransform: img.imageTransform || null,
+        focal: img.focal || null,
+        fillType: img.fillType || 'IMAGE',
+        sourceNodeId: img.fillType === 'VIDEO' ? (img.nodeId || null) : null,
       }));
     } catch (e) {}
   }
@@ -777,57 +910,10 @@ function layoutEditorialMini(images, cfg) {
       ]},
     ],
 
-    // ── n=3: 3×2 (T0/T1) · 4×2 (T2) ───────────────────────────────────────
-    // hero covers 4 of 6 (or 6 of 8) cells; two stacked smalls fill the rail.
-    3: [
-      // T0  hero left 2/3 · two stacked smalls right
-      { cols: 3, rows: 2, slots: [
-        { r:0, c:0, cs:2, rs:2 },   // hero
-        { r:0, c:2, cs:1, rs:1 },   // support top
-        { r:1, c:2, cs:1, rs:1 },   // support bottom
-      ]},
-      // T1  two stacked smalls left · hero right 2/3  (mirror)
-      { cols: 3, rows: 2, slots: [
-        { r:0, c:1, cs:2, rs:2 },   // hero
-        { r:0, c:0, cs:1, rs:1 },   // support top
-        { r:1, c:0, cs:1, rs:1 },   // support bottom
-      ]},
-      // T2  wider dominant hero 3/4 · two stacked smalls far-right
-      { cols: 4, rows: 2, slots: [
-        { r:0, c:0, cs:3, rs:2 },   // hero  (3/4 width)
-        { r:0, c:3, cs:1, rs:1 },   // support top
-        { r:1, c:3, cs:1, rs:1 },   // support bottom
-      ]},
-    ],
-
-    // ── n=4: 4×2 ────────────────────────────────────────────────────────────
-    // hero 2×2 (half width) + stepped supports filling the remaining 4 cells.
-    4: [
-      // T0  hero left half · medium inner-right · two stacked far-right
-      { cols: 4, rows: 2, slots: [
-        { r:0, c:0, cs:2, rs:2 },   // hero  (left block)
-        { r:0, c:2, cs:1, rs:2 },   // medium (inner-right column)
-        { r:0, c:3, cs:1, rs:1 },   // small  top-right
-        { r:1, c:3, cs:1, rs:1 },   // small  bottom-right
-      ]},
-      // T1  two stacked far-left · medium inner-left · hero right half  (mirror)
-      { cols: 4, rows: 2, slots: [
-        { r:0, c:2, cs:2, rs:2 },   // hero  (right block)
-        { r:0, c:1, cs:1, rs:2 },   // medium (inner-left column)
-        { r:0, c:0, cs:1, rs:1 },   // small  top-left
-        { r:1, c:0, cs:1, rs:1 },   // small  bottom-left
-      ]},
-      // T2  hero left half · wide medium top-right · two smalls bottom-right
-      { cols: 4, rows: 2, slots: [
-        { r:0, c:0, cs:2, rs:2 },   // hero  (left block)
-        { r:0, c:2, cs:2, rs:1 },   // medium (wide, top-right)
-        { r:1, c:2, cs:1, rs:1 },   // small  bottom-right inner
-        { r:1, c:3, cs:1, rs:1 },   // small  bottom-right outer
-      ]},
-    ],
-
-    // ── n=5: 4×3 ────────────────────────────────────────────────────────────
-    // hero 2×2 (top corner) + mediums as tall counterweights + base supports.
+    // ── n=5: 4×3 (T0/T1/T2) · 6×4 (T3/T4) · 9×5 (T5) ──────────────────────
+    // 6-template rotation. T0–T2: corner-hero compositions. T3/T4: full-width
+    // banner heroes top/bottom. T5: side-anchored hero with stacked-over-paired
+    // right column. No-repeat re-roll override picks across the full pool.
     5: [
       // T0  hero top-left · two tall counterweights right · two base strips
       { cols: 4, rows: 3, slots: [
@@ -853,18 +939,48 @@ function layoutEditorialMini(images, cfg) {
         { r:1, c:3, cs:1, rs:1 },   // small  mid-right outer
         { r:2, c:0, cs:4, rs:1 },   // base strip (full width, anchors composition)
       ]},
+      // T3  hero top-half full-width · four varied bottom cells (narrow-wide-wide-narrow)
+      { cols: 6, rows: 4, slots: [
+        { r:0, c:0, cs:6, rs:2 },   // hero (full-width top half)
+        { r:2, c:0, cs:1, rs:2 },   // bottom narrow-left
+        { r:2, c:1, cs:2, rs:2 },   // bottom wide-inner-left
+        { r:2, c:3, cs:2, rs:2 },   // bottom wide-inner-right
+        { r:2, c:5, cs:1, rs:2 },   // bottom narrow-right
+      ]},
+      // T4  hero bottom-half full-width · four varied top cells (wide-narrow-narrow-wide)
+      { cols: 6, rows: 4, slots: [
+        { r:2, c:0, cs:6, rs:2 },   // hero (full-width bottom half)
+        { r:0, c:0, cs:2, rs:2 },   // top wide-left
+        { r:0, c:2, cs:1, rs:2 },   // top narrow-inner-left
+        { r:0, c:3, cs:1, rs:2 },   // top narrow-inner-right
+        { r:0, c:4, cs:2, rs:2 },   // top wide-right
+      ]},
+      // T5  hero center-left ~55% full height · right col: 2 stacked over 2 side-by-side
+      { cols: 9, rows: 5, slots: [
+        { r:0, c:0, cs:5, rs:5 },   // hero (left ~55%, full height)
+        { r:0, c:5, cs:4, rs:2 },   // right upper-stack 1 (large)
+        { r:2, c:5, cs:4, rs:2 },   // right upper-stack 2 (large)
+        { r:4, c:5, cs:2, rs:1 },   // right lower-left (small)
+        { r:4, c:7, cs:2, rs:1 },   // right lower-right (small)
+      ]},
     ],
   };
 
   // ── Select template ────────────────────────────────────────────────────────
-  // Deterministic seed: hash of image dimensions so the same n cycles through
-  // templates as the image set changes, not locked to one template per count.
-  var dimHash = 0;
-  for (var j = 0; j < n; j++) dimHash += (images[j].width || 0) + (images[j].height || 0) * 2;
-
+  // Re-roll override (cfg.miniTemplateOverride) ensures consecutive re-rolls
+  // never repeat. Initial render falls back to a deterministic seed (hash of
+  // image dimensions) so the same image set always lands on the same template.
   var tplSet = TEMPLATES[n];
   if (!tplSet || !tplSet.length) return [];
-  var tpl = tplSet[(isFinite(dimHash) ? dimHash : 0) % tplSet.length] || tplSet[0];
+  var pickIdx;
+  if (cfg.miniTemplateOverride !== undefined && cfg.miniTemplateOverride !== null) {
+    pickIdx = cfg.miniTemplateOverride % tplSet.length;
+  } else {
+    var dimHash = 0;
+    for (var j = 0; j < n; j++) dimHash += (images[j].width || 0) + (images[j].height || 0) * 2;
+    pickIdx = (isFinite(dimHash) ? dimHash : 0) % tplSet.length;
+  }
+  var tpl = tplSet[pickIdx] || tplSet[0];
 
   // ── Grid cell sizing ───────────────────────────────────────────────────────
   // Same coordinate formula as the full editorial engine: cell position is
@@ -963,6 +1079,25 @@ function layoutEditorial(images, cfg) {
 
   // ── Hard cap ──────────────────────────────────────────────────────────────
   if (n > 40) { images = images.slice(0, 40); n = 40; }
+
+  // ── Portrait rotation ─────────────────────────────────────────────────────
+  // The landscape algorithm works well when W >= H. For portrait frames, run the
+  // same algorithm on a transposed canvas (swap W↔H) and rotate the cell
+  // coordinates 90° (transpose x↔y, w↔h) to fit the real frame.
+  if (H > W) {
+    var swappedCfg = {};
+    for (var k in cfg) swappedCfg[k] = cfg[k];
+    swappedCfg.width  = H;
+    swappedCfg.height = W;
+    var landscape = layoutEditorial(images, swappedCfg);
+    for (var ci = 0; ci < landscape.length; ci++) {
+      var cell = landscape[ci];
+      var ox = cell.x, oy = cell.y, ow = cell.width, oh = cell.height;
+      cell.x = oy;  cell.y = ox;
+      cell.width = oh;  cell.height = ow;
+    }
+    return landscape;
+  }
 
   // ── Small boards: hand-authored mini templates ─────────────────────────────
   if (n <= 5) return layoutEditorialMini(images, cfg);
