@@ -17,6 +17,7 @@
 </p>
 
 ---
+<h2 align="center"><a href="https://www.figma.com/community/plugin/1616902199522165388">NOW ON FIGMA COMMUNITY</a></h2>
 
 > **Early beta** — feedback welcome.
 
@@ -27,6 +28,7 @@ Pick a layout, tweak a few controls, hit generate.
 No dragging. No nudging. No "eh, that works."
 
 ---
+<h2 align="center"><a href="https://www.figma.com/community/plugin/1616902199522165388">NOW ON FIGMA COMMUNITY</a></h2>
 
 ## Install
 
@@ -42,7 +44,7 @@ The plugin will now appear under **Plugins → Development → Moodboard 3000**.
 > **Note:** Local plugins only work in the Figma desktop app (not browser).
 
 ---
-
+<h2 align="center"><a href="https://www.figma.com/community/plugin/1616902199522165388">NOW ON FIGMA COMMUNITY</a></h2>
 ## Layout Modes
 
 | Mode | Description |
@@ -53,7 +55,7 @@ The plugin will now appear under **Plugins → Development → Moodboard 3000**.
 | **Cluster** | Organic, center-weighted. Slightly chaotic (in a good way). |
 
 ---
-
+<h2 align="center"><a href="https://www.figma.com/community/plugin/1616902199522165388">NOW ON FIGMA COMMUNITY</a></h2>
 ## Usage
 
 1. Select up to **40 images** on your canvas
@@ -63,7 +65,7 @@ The plugin will now appear under **Plugins → Development → Moodboard 3000**.
 5. Generate
 
 A new frame is created with your layout. Your original images stay untouched.
-
+<h2 align="center"><a href="https://www.figma.com/community/plugin/1616902199522165388">NOW ON FIGMA COMMUNITY</a></h2>
 ### Tips
 
 - Mixed aspect ratios → better results
@@ -71,7 +73,7 @@ A new frame is created with your layout. Your original images stay untouched.
 - Smaller sets → Grid or Cluster tends to work better
 
 ---
-
+<h2 align="center"><a href="https://www.figma.com/community/plugin/1616902199522165388">NOW ON FIGMA COMMUNITY</a></h2>
 ## Settings
 
 - **Gap** — Spacing between images
@@ -81,7 +83,7 @@ A new frame is created with your layout. Your original images stay untouched.
 - **Page Size** — Preset canvas sizes
 
 ---
-
+<h2 align="center"><a href="https://www.figma.com/community/plugin/1616902199522165388">NOW ON FIGMA COMMUNITY</a></h2>
 ## Why this exists
 
 Most tools treat image layout like a grid problem. This treats it like composition.
@@ -90,7 +92,7 @@ Started as "I just need a quick moodboard."
 Turned into "why does nothing do this well?"
 
 ---
-
+<h2 align="center"><a href="https://www.figma.com/community/plugin/1616902199522165388">NOW ON FIGMA COMMUNITY</a></h2>
 ## Release Notes
 
 ### v1.2 — Aspect-ratio matching (2026-04-03)
@@ -107,13 +109,13 @@ Turned into "why does nothing do this well?"
 - Crop-aware export using imageTransform
 
 ---
-
+<h2 align="center"><a href="https://www.figma.com/community/plugin/1616902199522165388">NOW ON FIGMA COMMUNITY</a></h2>
 ## Status
 
 Early beta. Still refining edge cases, pushing layouts to feel less algorithmic and more intentional.
 
 ---
-
+<h2 align="center"><a href="https://www.figma.com/community/plugin/1616902199522165388">NOW ON FIGMA COMMUNITY</a></h2>
 ## Built by
 
 **Gavin Potenza** · [Datalands](https://datalands.co) — design, data, and tools
