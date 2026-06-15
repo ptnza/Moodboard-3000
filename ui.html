@@ -293,6 +293,11 @@ html,:host{width:100%;height:100%;color:var(--figma-color-text);-webkit-font-smo
     margin-right: 6px;
     vertical-align: middle;
   }
+  /* status toast: hug the text (fig-toast's default shrink-to-fit), but cap the
+     width at 180px so longer messages wrap instead of growing wide; auto height
+     so wrapped lines aren't clipped by fig-toast's fixed one-line height. */
+  #status-toast { height: auto; max-width: 180px; }
+  #status-toast #status-text { margin: 0; text-align: center; }
 </style>
 </head>
 <body>
@@ -319,6 +324,7 @@ html,:host{width:100%;height:100%;color:var(--figma-color-text);-webkit-font-smo
       <div id="thumb-strip">
         <div class="thumb-empty" id="thumb-empty">
           <fig-shimmer playing="false" id="empty-shimmer"><span class="thumb-empty-hint">Select images on canvas, then +</span></fig-shimmer>
+          <span class="thumb-empty-hint subtle">or drag images from desktop</span>
         </div>
       </div>
     </div>
@@ -1080,6 +1086,16 @@ const settings = {
 // override the visual without changing the user's underlying choice)
 let currentLayout = 'grid';
 
+// True when running in the Figma Slides editor (set from the init message).
+// In Slides the moodboard targets a fixed-size slide, so the page-size
+// preset is inert.
+let isSlides = false;
+
+// Slide target descriptor from code.js (selection-state message): the deck
+// dimensions — { width, height } — or null outside Slides. Drives the Slides
+// readout in applyFrameMode() (always "New Slide · WxH").
+let slideTarget = null;
+
 // ── DOM refs ─────────────────────────────────────────────────────────────────
 const thumbStrip   = document.getElementById('thumb-strip');
 const thumbEmpty   = document.getElementById('thumb-empty');
@@ -1452,6 +1468,15 @@ function applyFrameMode() {
     const w = selectedFrame.width, h = selectedFrame.height;
     frameReadout.textContent = `Using frame · ${w}×${h} (${approxRatio(w, h)})`;
     frameReadoutRow.style.display = '';
+  } else if (isSlides) {
+    // Slides are deck-fixed — the page-size preset doesn't apply. Generate always
+    // adds a new slide (no empty-slide reuse), so the readout is always "New
+    // Slide" plus the deck dimensions (from code.js getSlideTargetInfo).
+    presetSelect.style.display = 'none';
+    presetSelect.setAttribute('disabled', '');
+    const dims = slideTarget ? `${slideTarget.width}×${slideTarget.height}` : '1920×1080';
+    frameReadout.textContent = `New Slide · ${dims}`;
+    frameReadoutRow.style.display = '';
   } else {
     presetSelect.style.display = '';
     presetSelect.removeAttribute('disabled');
@@ -1570,7 +1595,7 @@ async function addFromFiles(files) {
     }
   }
   if (!capped && added > 0) {
-    setStatus(`Uploaded images are resized to ${MAX_COMPRESS_DIM}px for performance. For full resolution, add images to the canvas first, then select.`, '');
+    setStatus(`Drag-ins scaled to ${MAX_COMPRESS_DIM}px max.`, '', 3000);
   }
 }
 
@@ -1747,9 +1772,12 @@ window.onmessage = (event) => {
   if (!msg) return;
 
   if (msg.type === 'init') {
+    if (msg.editorType) isSlides = (msg.editorType === 'slides');
     addFromSelection(msg.images || []);
+    applyFrameMode();
   } else if (msg.type === 'selection-state') {
     selectedFrame = msg.frame || null;
+    slideTarget = msg.slideTarget || null;
     applyFrameMode();
     updateGenerateBtn();
     selectedCount = msg.selectionImageCount || 0;
@@ -1762,7 +1790,8 @@ window.onmessage = (event) => {
     const idx = images.findIndex(i => i.id === msg.id);
     if (idx !== -1) images.splice(idx, 1);
     renderThumbs();
-    setStatus('Failed to register image: ' + (msg.message || 'unknown error'), 'error');
+    console.error('Image register failed:', msg.message || 'unknown error');
+    setStatus("Couldn't add that image.", 'error');
   } else if (msg.type === 'thumb-update') {
     const img = msg.nodeId
       ? images.find(i => i.nodeId === msg.nodeId)
@@ -1798,7 +1827,7 @@ window.onmessage = (event) => {
     }
   } else if (msg.type === 'done') {
     const doneText = msg.kind === 'shuffled' ? 'Remixed!'
-                   : msg.kind === 'fit'      ? 'Fitted!'
+                   : msg.kind === 'fit'      ? 'Done!'
                                              : 'Engaged!';
     setStatus(doneText, 'success');
     updateGenerateBtn();
@@ -1811,7 +1840,7 @@ window.onmessage = (event) => {
 // ── Status toast (pinned above primary button) ──────────────────────────────
 const statusText = document.getElementById('status-text');
 
-function setStatus(msg) {
+function setStatus(msg, type, duration) {
   if (!msg) {
     statusToast.removeAttribute('open');
     statusText.textContent = '';
@@ -1824,6 +1853,9 @@ function setStatus(msg) {
     statusText.appendChild(spinner);
   }
   statusText.appendChild(document.createTextNode(msg));
+  // fig-toast auto-closes after its `duration` (ms); default 2s, override per call
+  // (e.g. the longer upload notice gets more dwell time).
+  statusToast.setAttribute('duration', duration != null ? duration : 2000);
   statusToast.setAttribute('open', '');
 }
 

@@ -8,7 +8,7 @@ var imageRegistry = {};
 // Holds partial chunk data while multi-chunk uploads are assembling
 var chunkBuffers  = {};
 
-figma.ui.postMessage({ type: 'init', images: extractSelectionImages() });
+figma.ui.postMessage({ type: 'init', images: extractSelectionImages(), editorType: figma.editorType });
 loadThumbsAsync(figma.currentPage.selection);
 postSelectionState();
 
@@ -57,8 +57,10 @@ figma.ui.onmessage = async function(msg) {
       handleRegisterImage(msg);
       break;
     case 'refresh-selection':
-      figma.ui.postMessage({ type: 'init', images: extractSelectionImages() });
+      figma.ui.postMessage({ type: 'init', images: extractSelectionImages(), editorType: figma.editorType });
       loadThumbsAsync(figma.currentPage.selection);
+      postSelectionState();  // re-push slide target: manual refresh path in case
+                             // slide navigation doesn't fire 'selectionchange'
       break;
     case 'close':
       figma.closePlugin();
@@ -93,7 +95,37 @@ function getSelectedFrameInfo() {
 }
 
 function postSelectionState() {
-  figma.ui.postMessage({ type: 'selection-state', frame: getSelectedFrameInfo(), selectionImageCount: countSelectionImages() });
+  figma.ui.postMessage({ type: 'selection-state', frame: getSelectedFrameInfo(), selectionImageCount: countSelectionImages(), slideTarget: getSlideTargetInfo() });
+}
+
+// ── Slide target (Figma Slides editor) ───────────────────────────────────────
+// Slides always creates a NEW slide (no empty-slide reuse), so the readout is
+// always "New Slide" — this just supplies the deck dimensions. Read them from a
+// real slide (focused, else first in the grid), falling back to 1920×1080.
+// Returns null outside the Slides editor (design-file readout is unaffected).
+function getSlideTargetInfo() {
+  if (figma.editorType !== 'slides') return null;
+  var dimsNode = figma.currentPage.focusedSlide || firstSlideInDeck();
+  // Guard the shape too, not just presence: if getSlideGrid ever yields a node
+  // without numeric dims, fall back to 1920×1080 rather than emit NaN×NaN.
+  var W = (dimsNode && typeof dimsNode.width  === 'number') ? Math.round(dimsNode.width)  : 1920;
+  var H = (dimsNode && typeof dimsNode.height === 'number') ? Math.round(dimsNode.height) : 1080;
+  return { width: W, height: H };
+}
+
+// First reachable SlideNode in the deck, for reading deck dimensions when no
+// slide is focused. Guarded: getSlideGrid is Slides-only and the deck shape may
+// vary, so any failure falls back to the caller's 1920×1080 default.
+function firstSlideInDeck() {
+  try {
+    var grid = figma.getSlideGrid();
+    for (var r = 0; r < grid.length; r++) {
+      for (var c = 0; c < grid[r].length; c++) {
+        if (grid[r][c]) return grid[r][c];
+      }
+    }
+  } catch (e) {}
+  return null;
 }
 
 function countSelectionImages() {
@@ -265,6 +297,33 @@ async function handleGenerate(images, config, frameId) {
         throw new Error('Selected frame is no longer available — try refreshing.');
       }
       targetFrame = node;
+    } else if (figma.editorType === 'slides') {
+      // Figma Slides: the slide is the PAGE; the moodboard is a FRAME on it.
+      // Building into a real frame (the targetFrame seam) is what lets re-roll
+      // and fit-to-size work in Slides with no special-casing — they operate on
+      // a frame container, and buildMoodboard writes the mb3k marker onto the
+      // frame (not the slide), so remix/re-roll can find it.
+      // Always add a NEW slide (no empty-slide reuse) — appended to the end of
+      // the deck. The "New Slide" readout reflects this.
+      var slide = figma.createSlide();
+      // A new slide may carry default template placeholder layers; remove them
+      // so they don't sit behind the board frame.
+      for (var sc = slide.children.length - 1; sc >= 0; sc--) slide.children[sc].remove();
+      // Full-bleed board frame at the slide origin, pre-styled so buildMoodboard's
+      // BYO-frame path (which preserves a targetFrame's fills/size/position) uses
+      // it as-is. The frame's bg shows through the gaps between cells.
+      var slideFrame = figma.createFrame();
+      slide.appendChild(slideFrame);
+      slideFrame.resize(Math.round(slide.width), Math.round(slide.height));
+      slideFrame.x = 0;
+      slideFrame.y = 0;
+      var bg = config.bgColor;
+      slideFrame.fills = (bg && bg.hex)
+        ? [{ type: 'SOLID', color: hexToRgb(bg.hex), opacity: (bg.opacity != null ? bg.opacity : 1) }]
+        : [];
+      slideFrame.clipsContent = true;
+      try { slideFrame.name = 'Moodboard 3000 — ' + config.layout; } catch (e) {}
+      targetFrame = slideFrame;
     }
 
     if (config.layout === 'editorial') {
@@ -276,7 +335,10 @@ async function handleGenerate(images, config, frameId) {
     }
 
     var frame = await buildMoodboard(resolved, config, targetFrame);
-    figma.viewport.scrollAndZoomIntoView([frame]);
+    // Non-fatal: the board is already committed. Slides viewport navigation may
+    // differ from the canvas, so don't let a viewport quirk report a successful
+    // generate as a failure (which would prompt a re-click → duplicate slide).
+    try { figma.viewport.scrollAndZoomIntoView([frame]); } catch (e) {}
     postSelectionState();  // sync UI so a freshly-generated frame reads as MB3K
     figma.ui.postMessage({ type: 'done', kind: 'created' });
   } catch (err) {
@@ -297,13 +359,13 @@ async function handleReRoll(frameId, partialCfg, panelImages, overrideMode) {
     }
 
     var raw = node.getPluginData('mb3k');
-    if (!raw) throw new Error('This frame was not generated by Moodboard 3000.');
+    if (!raw) throw new Error('This frame was not generated by Moodboard 3000 — Engage to make a new one.');
     var mb3k;
     try { mb3k = JSON.parse(raw); } catch (e) {
-      throw new Error('Frame metadata is unreadable — cannot shuffle.');
+      throw new Error('Frame metadata is unreadable — cannot remix.');
     }
     if (!mb3k || !mb3k.mode) {
-      throw new Error('Frame metadata is missing layout info — cannot shuffle.');
+      throw new Error('Frame metadata is missing layout info — cannot remix.');
     }
 
     // Image source: ALWAYS reconstruct from the frame's existing cells. Remix
@@ -316,7 +378,7 @@ async function handleReRoll(frameId, partialCfg, panelImages, overrideMode) {
     // stop sending images in the re-roll payload from ui.html.
     var images = await reconstructImagesFromFrame(node);
     if (images.length < 5) {
-      throw new Error('This frame has fewer than 5 image cells. Add cells back or regenerate.');
+      throw new Error('This moodboard has fewer than 5 images — add more, or Engage to start fresh.');
     }
 
     // overrideMode = panel layout when user clicked Fit-to-Frame on a resized
@@ -358,7 +420,9 @@ async function handleReRoll(frameId, partialCfg, panelImages, overrideMode) {
     }
 
     var frame = await buildMoodboard(images, cfg, node, doVariance);
-    figma.viewport.scrollAndZoomIntoView([frame]);
+    // Non-fatal (same as handleGenerate): the remix/fit is already committed, so
+    // don't let a Slides viewport quirk report success as a failure.
+    try { figma.viewport.scrollAndZoomIntoView([frame]); } catch (e) {}
     postSelectionState();  // sync UI: marker's w/h + generatedAt were rewritten
     figma.ui.postMessage({ type: 'done', kind: overrideMode ? 'fit' : 'shuffled' });
   } catch (err) {
