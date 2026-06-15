@@ -91,7 +91,7 @@ and Fit confirmed working in Slides.** The frame-on-slide architecture is valida
 - `createSlide()` appends to the END of the deck → the new slide lands last, not
   next to where the user was. Inherent to the API.
 
-**Not committed** — awaiting in-Figma test sign-off before checkpointing.
+**Shipped in ac310d8** — merged to main (Slides Remix/Fit confirmed in-Figma).
 
 ## Out of scope (this task)
 - Multi-slide deck / one-image-per-slide slideshow generator.
