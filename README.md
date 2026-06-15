@@ -45,6 +45,7 @@ The plugin will now appear under **Plugins → Development → Moodboard 3000**.
 
 ---
 <h2 align="center"><a href="https://www.figma.com/community/plugin/1616902199522165388">NOW ON FIGMA COMMUNITY</a></h2>
+
 ## Layout Modes
 
 | Mode | Description |
@@ -56,6 +57,7 @@ The plugin will now appear under **Plugins → Development → Moodboard 3000**.
 
 ---
 <h2 align="center"><a href="https://www.figma.com/community/plugin/1616902199522165388">NOW ON FIGMA COMMUNITY</a></h2>
+
 ## Usage
 
 1. Select up to **40 images** on your canvas
@@ -74,6 +76,7 @@ A new frame is created with your layout. Your original images stay untouched.
 
 ---
 <h2 align="center"><a href="https://www.figma.com/community/plugin/1616902199522165388">NOW ON FIGMA COMMUNITY</a></h2>
+
 ## Settings
 
 - **Gap** — Spacing between images
@@ -84,6 +87,7 @@ A new frame is created with your layout. Your original images stay untouched.
 
 ---
 <h2 align="center"><a href="https://www.figma.com/community/plugin/1616902199522165388">NOW ON FIGMA COMMUNITY</a></h2>
+
 ## Why this exists
 
 Most tools treat image layout like a grid problem. This treats it like composition.
@@ -93,6 +97,7 @@ Turned into "why does nothing do this well?"
 
 ---
 <h2 align="center"><a href="https://www.figma.com/community/plugin/1616902199522165388">NOW ON FIGMA COMMUNITY</a></h2>
+
 ## Release Notes
 
 ### v1.2 — Aspect-ratio matching (2026-04-03)
@@ -110,12 +115,14 @@ Turned into "why does nothing do this well?"
 
 ---
 <h2 align="center"><a href="https://www.figma.com/community/plugin/1616902199522165388">NOW ON FIGMA COMMUNITY</a></h2>
+
 ## Status
 
 Early beta. Still refining edge cases, pushing layouts to feel less algorithmic and more intentional.
 
 ---
 <h2 align="center"><a href="https://www.figma.com/community/plugin/1616902199522165388">NOW ON FIGMA COMMUNITY</a></h2>
+
 ## Built by
 
 **Gavin Potenza** · [Datalands](https://datalands.co) — design, data, and tools
